@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#05050e" />
+    <title>NEON SERPENT：霓虹吞星</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main id="app" class="game-shell" data-phase="ready">
+      <canvas id="game-canvas" class="game-canvas" aria-label="NEON SERPENT game canvas"></canvas>
+
+      <div id="game-ui" class="game-ui">
+        <header class="hud-strip" aria-label="游戏状态">
+          <div class="brand-lockup" aria-label="NEON SERPENT">
+            <span class="brand-mark"></span>
+            <span class="brand-title">NEON SERPENT</span>
+            <span class="brand-subtitle">霓虹吞星</span>
+          </div>
+
+          <div class="status-cluster">
+            <span class="stat-chip"><span>Score</span><strong id="score-label">0</strong></span>
+            <span class="stat-chip"><span>Combo</span><strong id="combo-label">x1</strong></span>
+            <span class="stat-chip"><span>Best</span><strong id="best-label">0</strong></span>
+          </div>
+
+          <button id="pause-button" class="icon-button" type="button" aria-label="暂停">P</button>
+        </header>
+
+        <section id="start-panel" class="start-panel" aria-label="开始界面">
+          <div class="start-orbit" aria-hidden="true"></div>
+          <p class="panel-kicker">SERPENT CORE ONLINE</p>
+          <h1>NEON SERPENT</h1>
+          <p class="panel-subtitle">霓虹吞星</p>
+          <button id="start-button" class="primary-action" type="button">启动游戏</button>
+        </section>
+
+        <div id="touch-controls" class="touch-controls" aria-label="移动端控制">
+          <div id="joystick" class="joystick" role="application" aria-label="方向摇杆">
+            <span id="joystick-line" class="joystick-line" aria-hidden="true"></span>
+            <span class="joystick-ring" aria-hidden="true"></span>
+            <span id="joystick-knob" class="joystick-knob" aria-hidden="true"></span>
+          </div>
+
+          <button id="boost-button" class="boost-button" type="button" aria-label="冲刺">BOOST</button>
+        </div>
+
+        <aside class="diagnostic-strip" aria-label="运行状态">
+          <span id="state-label">Ready</span>
+          <span id="fps-label">-- FPS</span>
+          <span id="size-label">-- x --</span>
+        </aside>
+
+        <div class="orientation-mask" role="status">
+          <strong>建议横屏游玩</strong>
+          <span>旋转设备后可以获得更完整的操控空间</span>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
