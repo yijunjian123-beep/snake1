@@ -37,11 +37,18 @@ export interface GridCell {
   row: number;
 }
 
+export interface BlackHole {
+  cell: GridCell;
+  seed: number;
+  spawnTime: number;
+}
+
 export interface GameSnapshot {
   phase: GamePhase;
   grid: GridMetrics;
   snake: readonly GridCell[];
   foods: readonly GridCell[];
+  blackHoles: readonly BlackHole[];
   score: number;
   highScore: number;
   direction: Direction;

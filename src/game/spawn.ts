@@ -43,6 +43,24 @@ export function findSafeSpawnPosition(grid: GridMetrics, config: SafeSpawnConfig
   return pickFrom(fallback, random);
 }
 
+export function findStage0SafeSpawnPosition(grid: GridMetrics, config: SafeSpawnConfig = {}): GridCell | null {
+  const occupied = new Set<string>();
+  const occupiedCells = [...(config.occupiedCells ?? []), ...(config.blockedCells ?? [])];
+  occupiedCells.forEach((cell) => occupied.add(cellKey(cell)));
+  const head = config.snakeHead ?? null;
+  const headRadius = Math.max(0, Math.floor(config.snakeHeadRadius ?? 1));
+  const wallPadding = Math.max(0, Math.floor(config.wallPadding ?? 0));
+  const dangerZones = config.dangerZones ?? [];
+  const random = config.random ?? DEFAULT_RANDOM;
+  const maxAttempts = Math.max(1, Math.floor(config.maxAttempts ?? 1));
+
+  return pickCandidate(grid, occupied, head, headRadius, wallPadding, dangerZones, {
+    ignoreHeadRadius: false,
+    ignoreWallPadding: false,
+    ignoreDangerZones: false,
+  }, maxAttempts, random);
+}
+
 function pickCandidate(
   grid: GridMetrics,
   occupied: Set<string>,

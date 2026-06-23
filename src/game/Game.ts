@@ -1,10 +1,12 @@
 import { createAudioController, type AudioController } from "./audio";
+import { getDesiredBlackHoleCount, isBlackHoleCollision, spawnBlackHole } from "./blackHole";
 import { createInputController } from "./input";
 import { DEFAULT_SAFE_SPAWN_CONFIG, getUnlockedFeatures as computeUnlockedFeatures, type GameProgress, type UnlockedFeatures } from "./progression";
 import { findSafeSpawnPosition } from "./spawn";
 import { createRenderer } from "./render";
 import { readHighScore, writeHighScore } from "./storage";
 import type {
+  BlackHole,
   CanvasSize,
   Direction,
   GamePhase,
@@ -47,6 +49,7 @@ const OPPOSITE_DIRECTIONS: Record<Direction, Direction> = {
 
 const STEP_MS = 120;
 const BOOST_STEP_MS = 72;
+const MAX_DIRECTION_QUEUE_LENGTH = 2;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
 const COMBO_MAX_TIMER_MS = 4000;
@@ -115,8 +118,10 @@ export class Game {
   private grid: GridMetrics;
   private snake: GridCell[] = [];
   private foods: GridCell[] = [];
+  private blackHoles: BlackHole[] = [];
+  private birthCell: GridCell = { column: 0, row: 0 };
   private direction: Direction = "right";
-  private nextDirection: Direction = "right";
+  private directionQueue: Direction[] = [];
   private score = 0;
   private coresEaten = 0;
   private comboCount = 0;
@@ -313,11 +318,21 @@ export class Game {
   }
 
   private queueDirection(direction: Direction): void {
-    if (this.phase !== "playing" || direction === this.direction || direction === OPPOSITE_DIRECTIONS[this.direction]) {
+    if (this.phase !== "playing") {
       return;
     }
 
-    this.nextDirection = direction;
+    const lastQueuedDirection = this.directionQueue[this.directionQueue.length - 1] ?? this.direction;
+
+    if (
+      direction === lastQueuedDirection ||
+      direction === OPPOSITE_DIRECTIONS[lastQueuedDirection] ||
+      this.directionQueue.length >= MAX_DIRECTION_QUEUE_LENGTH
+    ) {
+      return;
+    }
+
+    this.directionQueue.push(direction);
   }
 
   private resetRun(phase: GamePhase): void {
@@ -331,11 +346,13 @@ export class Game {
     this.lastCoreEatTime = 0;
     this.isComboUnlocked = false;
     this.direction = "right";
-    this.nextDirection = "right";
+    this.directionQueue = [];
     this.isBoosting = false;
     this.stepAccumulator = 0;
     this.playElapsed = 0;
     this.snake = this.createStartingSnake();
+    this.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
+    this.blackHoles = [];
     this.foods = this.createFoods();
     this.syncUi(true);
   }
@@ -371,7 +388,13 @@ export class Game {
       ...DEFAULT_SAFE_SPAWN_CONFIG,
       wallPadding: 0,
       snakeHeadRadius: 0,
-      occupiedCells: [...this.snake, ...this.foods, ...extraBlocked],
+      occupiedCells: [
+        ...this.snake,
+        ...this.foods,
+        ...this.blackHoles.map((blackHole) => blackHole.cell),
+        ...extraBlocked,
+      ],
+      dangerZones: this.blackHoles.map((blackHole) => ({ center: blackHole.cell, radius: 1 })),
     });
   }
 
@@ -395,7 +418,7 @@ export class Game {
       return;
     }
 
-    this.direction = this.nextDirection;
+    this.direction = this.directionQueue.shift() ?? this.direction;
 
     const delta = DIRECTION_DELTAS[this.direction];
     const nextHead: GridCell = {
@@ -410,12 +433,18 @@ export class Game {
       return;
     }
 
+    if (this.collidesWithBlackHole(nextHead)) {
+      this.endRun();
+      return;
+    }
+
     this.snake = [nextHead, ...this.snake];
 
     if (ateFood) {
       this.foods.splice(ateFoodIndex, 1);
       this.coresEaten += 1;
       this.handleCoreEat();
+      this.refreshBlackHoles();
       this.refillFoods();
       this.saveHighScoreIfNeeded();
 
@@ -441,6 +470,28 @@ export class Game {
     this.lastCoreEatTime = this.playElapsed;
     this.refreshComboUnlockState();
     this.score += SCORE_PER_CORE * (wasComboUnlocked ? this.comboMultiplier : 1);
+  }
+
+  private refreshBlackHoles(): void {
+    const desiredCount = getDesiredBlackHoleCount(this.getProgress());
+
+    while (this.blackHoles.length < desiredCount) {
+      const nextBlackHole = spawnBlackHole({
+        grid: this.grid,
+        progress: this.getProgress(),
+        snake: this.snake,
+        foods: this.foods,
+        existingBlackHoles: this.blackHoles,
+        birthCell: this.birthCell,
+        currentTime: this.elapsed / 1000,
+      });
+
+      if (!nextBlackHole) {
+        break;
+      }
+
+      this.blackHoles.push(nextBlackHole);
+    }
   }
 
   private refreshComboUnlockState(): void {
@@ -477,15 +528,49 @@ export class Game {
     return bodyToCheck.some((segment) => cellsMatch(segment, cell));
   }
 
+  private collidesWithBlackHole(cell: GridCell): boolean {
+    return this.blackHoles.some((blackHole) => isBlackHoleCollision(cell, blackHole, this.grid));
+  }
+
   private isOutOfBounds(cell: GridCell): boolean {
     return cell.column < 0 || cell.row < 0 || cell.column >= this.grid.columns || cell.row >= this.grid.rows;
   }
 
   private isCurrentPlacementValid(): boolean {
     const snakeIsValid = this.snake.every((segment) => !this.isOutOfBounds(segment));
-    const foodsAreValid = this.foods.every((food) => !this.isOutOfBounds(food) && !this.snake.some((segment) => cellsMatch(segment, food)));
+    const occupiedBlackHoleCells = new Set<string>();
+    const foodsAreValid = this.foods.every((food) => {
+      if (this.isOutOfBounds(food) || this.snake.some((segment) => cellsMatch(segment, food))) {
+        return false;
+      }
 
-    return snakeIsValid && foodsAreValid;
+      return !this.blackHoles.some((blackHole) => cellsMatch(blackHole.cell, food));
+    });
+    const blackHolesAreValid = this.blackHoles.every((blackHole) => {
+      if (this.isOutOfBounds(blackHole.cell)) {
+        return false;
+      }
+
+      const key = `${blackHole.cell.column}:${blackHole.cell.row}`;
+
+      if (occupiedBlackHoleCells.has(key)) {
+        return false;
+      }
+
+      occupiedBlackHoleCells.add(key);
+
+      if (this.snake.some((segment) => cellsMatch(segment, blackHole.cell))) {
+        return false;
+      }
+
+      if (this.foods.some((food) => cellsMatch(food, blackHole.cell))) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return snakeIsValid && foodsAreValid && blackHolesAreValid;
   }
 
   private endRun(): void {
@@ -511,6 +596,10 @@ export class Game {
       grid: { ...this.grid },
       snake: this.snake.map((segment) => ({ ...segment })),
       foods: this.foods.map((food) => ({ ...food })),
+      blackHoles: this.blackHoles.map((blackHole) => ({
+        ...blackHole,
+        cell: { ...blackHole.cell },
+      })),
       score: this.score,
       highScore: this.highScore,
       direction: this.direction,

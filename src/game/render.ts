@@ -1,4 +1,5 @@
-import type { CanvasSize, Direction, FrameInfo, GameSnapshot, GridCell, GridMetrics, Renderer } from "./types";
+import { BLACK_HOLE_CONFIG, getBlackHoleHitRadius, getBlackHoleVisualRadius } from "./blackHole";
+import type { BlackHole, CanvasSize, Direction, FrameInfo, GameSnapshot, GridCell, GridMetrics, Renderer } from "./types";
 
 interface Star {
   x: number;
@@ -55,6 +56,7 @@ interface ShakeState {
 interface RenderState {
   particles: Particle[];
   rewardBursts: RewardBurst[];
+  blackHoleAttractionParticles: Particle[];
   trails: TrailSample[];
   previousScore: number | null;
   previousComboCount: number | null;
@@ -67,10 +69,10 @@ interface RenderState {
 const STAR_COUNT = 190;
 const MAX_DPR = 3;
 const MAX_PARTICLES = 260;
+const MAX_BLACK_HOLE_ATTRACTION_PARTICLES = 64;
 const MAX_REWARD_BURSTS = 5;
 const MAX_TRAIL_SAMPLES = 6;
 const TRAIL_LIFE_SECONDS = 0.34;
-
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -126,6 +128,7 @@ function createRenderState(): RenderState {
   return {
     particles: [],
     rewardBursts: [],
+    blackHoleAttractionParticles: [],
     trails: [],
     previousScore: null,
     previousComboCount: null,
@@ -255,6 +258,46 @@ function getComboVisualStrength(snapshot: GameSnapshot): number {
   return Math.max(0, Math.min(1, (snapshot.comboMultiplier - 1) / 3 + snapshot.comboCount / 16));
 }
 
+function getBlackHoleAttractionRange(grid: GridMetrics): number {
+  return grid.cellSize * BLACK_HOLE_CONFIG.visualAttractionRangeCells;
+}
+
+function spawnBlackHoleAttractionParticles(
+  state: RenderState,
+  blackHole: BlackHole,
+  grid: GridMetrics,
+  time: number,
+  intensity: number,
+): void {
+  const center = cellCenter(grid, blackHole.cell);
+  const radius = getBlackHoleAttractionRange(grid);
+  const count = Math.max(1, Math.round(2 + intensity * 4));
+
+  for (let index = 0; index < count; index += 1) {
+    const angle = time * (0.8 + intensity * 0.42) + blackHole.seed * 0.0017 + index * 1.91;
+    const distance = radius * (0.32 + seededUnit(blackHole.seed + index, 71) * 0.68);
+
+    state.blackHoleAttractionParticles.push({
+      x: center.x + Math.cos(angle) * distance,
+      y: center.y + Math.sin(angle) * distance * 0.76,
+      vx: Math.cos(angle + Math.PI * 0.5) * 2,
+      vy: Math.sin(angle + Math.PI * 0.5) * 2,
+      radius: 0.9 + intensity * 1.2,
+      hue: 214 + seededUnit(blackHole.seed + index, 73) * 54,
+      life: 0.42,
+      maxLife: 0.42,
+      drag: 0.92,
+    });
+  }
+
+  if (state.blackHoleAttractionParticles.length > MAX_BLACK_HOLE_ATTRACTION_PARTICLES) {
+    state.blackHoleAttractionParticles.splice(
+      0,
+      state.blackHoleAttractionParticles.length - MAX_BLACK_HOLE_ATTRACTION_PARTICLES,
+    );
+  }
+}
+
 function findRemovedFood(previousFoods: readonly GridCell[], currentFoods: readonly GridCell[]): GridCell | null {
   for (const previousFood of previousFoods) {
     if (!currentFoods.some((currentFood) => cellsMatch(currentFood, previousFood))) {
@@ -282,10 +325,11 @@ function rewardShakeDirection(grid: GridMetrics, point: { x: number; y: number }
   };
 }
 
-function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: number): void {
+function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: number, time: number): void {
   const dt = Math.min(delta / 1000, 0.05);
   const head = snapshot.snake[0] ?? null;
   const headKey = cellKey(head);
+  const headCenter = head ? cellCenter(snapshot.grid, head) : null;
   const scoreIncreased = state.previousScore !== null && snapshot.score > state.previousScore;
   const comboIncreased = state.previousComboCount !== null && snapshot.comboCount > state.previousComboCount;
   const enteredGameOver = snapshot.phase === "gameOver" && state.previousPhase !== "gameOver";
@@ -312,6 +356,15 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   }
 
   state.trails = state.trails.filter((sample) => sample.life > 0);
+  for (const particle of state.blackHoleAttractionParticles) {
+    particle.life -= dt;
+    particle.x += particle.vx * dt;
+    particle.y += particle.vy * dt;
+    particle.vx *= Math.pow(particle.drag, delta / 16.67);
+    particle.vy *= Math.pow(particle.drag, delta / 16.67);
+  }
+
+  state.blackHoleAttractionParticles = state.blackHoleAttractionParticles.filter((particle) => particle.life > 0);
   state.shake.time = Math.max(0, state.shake.time - dt);
 
   if (scoreIncreased) {
@@ -351,6 +404,23 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
     const center = cellCenter(snapshot.grid, head);
     spawnBurst(state, center.x, center.y, 112, 318, snapshot.grid.cellSize * 16);
     triggerShake(state, 7.2, 0.28, "impact");
+  }
+
+  if (snapshot.blackHoles.length > 0 && headCenter) {
+    for (const blackHole of snapshot.blackHoles) {
+      const holeCenter = cellCenter(snapshot.grid, blackHole.cell);
+      const distance = Math.hypot(headCenter.x - holeCenter.x, headCenter.y - holeCenter.y);
+
+      if (distance <= getBlackHoleAttractionRange(snapshot.grid) * 1.18) {
+        spawnBlackHoleAttractionParticles(
+          state,
+          blackHole,
+          snapshot.grid,
+          time,
+          Math.max(0.2, 1 - distance / getBlackHoleAttractionRange(snapshot.grid)),
+        );
+      }
+    }
   }
 
   if (
@@ -716,6 +786,101 @@ function drawFood(context: CanvasRenderingContext2D, snapshot: GameSnapshot, tim
     context.restore();
   }
 
+  context.restore();
+}
+
+function drawBlackHole(context: CanvasRenderingContext2D, snapshot: GameSnapshot, blackHole: BlackHole, time: number): void {
+  const { grid } = snapshot;
+  const center = cellCenter(grid, blackHole.cell);
+  const pulse = 0.5 + Math.sin(time * BLACK_HOLE_CONFIG.pulseSpeed + blackHole.seed * 0.01) * 0.5;
+  const rotation = time * (1.7 + seededUnit(blackHole.seed, 12) * 0.5) + blackHole.spawnTime * 0.2;
+  const visualRadius = getBlackHoleVisualRadius(grid);
+  const hitRadius = getBlackHoleHitRadius(grid);
+  const coreRadius = hitRadius * (0.64 + pulse * 0.07);
+  const dangerRadius = hitRadius * 1.08;
+  const accretionRadius = visualRadius * (1.18 + pulse * 0.12);
+  const lensRadius = visualRadius * (2.16 + pulse * 0.16);
+
+  context.save();
+  context.translate(center.x, center.y);
+  context.rotate(rotation);
+  context.globalCompositeOperation = "source-over";
+
+  const lens = context.createRadialGradient(0, 0, coreRadius * 0.1, 0, 0, lensRadius);
+  lens.addColorStop(0, `rgba(4, 8, 18, ${0.95 - pulse * 0.1})`);
+  lens.addColorStop(0.28, `rgba(18, 24, 44, ${0.78 + pulse * 0.04})`);
+  lens.addColorStop(0.5, `rgba(255, 43, 214, ${0.06 + pulse * 0.03})`);
+  lens.addColorStop(0.72, `rgba(0, 245, 255, ${0.06 + pulse * 0.03})`);
+  lens.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+  context.fillStyle = lens;
+  context.beginPath();
+  context.arc(0, 0, lensRadius, 0, Math.PI * 2);
+  context.fill();
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.shadowColor = "rgba(0, 245, 255, 0.45)";
+  context.shadowBlur = 12 + pulse * 6;
+  context.strokeStyle = "rgba(0, 245, 255, 0.16)";
+  context.lineWidth = Math.max(1, grid.cellSize * 0.04);
+
+  for (let ring = 0; ring < 3; ring += 1) {
+    const ringPhase = rotation * (1.05 + ring * 0.18) + blackHole.seed * 0.003 + ring * 0.72;
+    const ringScale = 1 + ring * 0.16;
+    context.globalAlpha = 0.28 - ring * 0.06;
+    context.beginPath();
+    context.ellipse(
+      Math.cos(ringPhase) * grid.cellSize * 0.06,
+      Math.sin(ringPhase * 0.82) * grid.cellSize * 0.04,
+      accretionRadius * ringScale,
+      accretionRadius * (0.28 + ring * 0.06),
+      ringPhase * 0.92,
+      0,
+      Math.PI * 2,
+    );
+    context.stroke();
+  }
+
+  context.globalAlpha = 1;
+  const accretion = context.createLinearGradient(-accretionRadius * 1.25, -accretionRadius * 0.5, accretionRadius * 1.25, accretionRadius * 0.5);
+  accretion.addColorStop(0, "rgba(0, 245, 255, 0.08)");
+  accretion.addColorStop(0.35, "rgba(120, 128, 255, 0.28)");
+  accretion.addColorStop(0.7, "rgba(255, 43, 214, 0.24)");
+  accretion.addColorStop(1, "rgba(0, 245, 255, 0.06)");
+  context.strokeStyle = accretion;
+  context.lineWidth = Math.max(1.2, grid.cellSize * 0.07);
+  context.beginPath();
+  context.ellipse(0, 0, accretionRadius * 1.1, accretionRadius * 0.35, rotation * 0.52, 0, Math.PI * 2);
+  context.stroke();
+
+  context.globalAlpha = 1;
+  context.shadowColor = "rgba(0, 0, 0, 0.7)";
+  context.shadowBlur = 0;
+  context.fillStyle = "#02030a";
+  context.beginPath();
+  context.arc(0, 0, coreRadius, 0, Math.PI * 2);
+  context.fill();
+
+  context.strokeStyle = "rgba(255, 255, 255, 0.07)";
+  context.lineWidth = Math.max(1, grid.cellSize * 0.03);
+  context.beginPath();
+  context.arc(0, 0, dangerRadius, 0, Math.PI * 2);
+  context.stroke();
+
+  context.strokeStyle = "rgba(255, 43, 214, 0.12)";
+  context.lineWidth = Math.max(1, grid.cellSize * 0.05);
+  context.beginPath();
+  context.arc(0, 0, dangerRadius * 1.04, 0, Math.PI * 2);
+  context.stroke();
+
+  context.globalCompositeOperation = "source-over";
+  context.fillStyle = "rgba(0, 0, 0, 0.42)";
+  context.beginPath();
+  context.arc(0, 0, dangerRadius * 0.9, 0, Math.PI * 2);
+  context.fill();
+
+  context.restore();
   context.restore();
 }
 
@@ -1091,6 +1256,33 @@ function drawParticles(context: CanvasRenderingContext2D, particles: readonly Pa
   context.restore();
 }
 
+function drawBlackHoleAttractionParticles(
+  context: CanvasRenderingContext2D,
+  particles: readonly Particle[],
+): void {
+  if (particles.length === 0) {
+    return;
+  }
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+
+  for (const particle of particles) {
+    const progress = clamp(particle.life / particle.maxLife, 0, 1);
+    const radius = particle.radius * (0.7 + progress * 0.5);
+
+    context.globalAlpha = progress * 0.45;
+    context.fillStyle = `hsl(${particle.hue} 100% ${52 + progress * 18}%)`;
+    context.shadowColor = `hsl(${particle.hue} 100% 62%)`;
+    context.shadowBlur = 10 * progress;
+    context.beginPath();
+    context.arc(particle.x, particle.y, radius, 0, Math.PI * 2);
+    context.fill();
+  }
+
+  context.restore();
+}
+
 function drawStateOverlay(context: CanvasRenderingContext2D, snapshot: GameSnapshot, time: number): void {
   if (snapshot.phase !== "paused" && snapshot.phase !== "gameOver") {
     return;
@@ -1124,6 +1316,21 @@ function drawStateOverlay(context: CanvasRenderingContext2D, snapshot: GameSnaps
     context.fillStyle = "#f7fbff";
     context.shadowBlur = 12;
     context.fillText("PRESS R OR RESTART", grid.offsetX + width / 2, grid.offsetY + height / 2 + Math.max(34, width / 13));
+  }
+
+  context.restore();
+}
+
+function drawBlackHoles(context: CanvasRenderingContext2D, snapshot: GameSnapshot, time: number): void {
+  if (snapshot.blackHoles.length === 0) {
+    return;
+  }
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+
+  for (const blackHole of snapshot.blackHoles) {
+    drawBlackHole(context, snapshot, blackHole, time);
   }
 
   context.restore();
@@ -1163,7 +1370,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     render(frame: FrameInfo): void {
       const time = frame.elapsed / 1000;
 
-      updateRenderState(state, frame.snapshot, frame.delta);
+      updateRenderState(state, frame.snapshot, frame.delta, time);
 
       context.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
       context.clearRect(0, 0, size.width, size.height);
@@ -1179,7 +1386,9 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       context.save();
       context.translate(shakeOffset.x, shakeOffset.y);
       drawBoard(context, frame.snapshot, time);
+      drawBlackHoles(context, frame.snapshot, time);
       drawSnakeTrail(context, frame.snapshot, state.trails);
+      drawBlackHoleAttractionParticles(context, state.blackHoleAttractionParticles);
       context.restore();
 
       drawRewardBursts(context, state.rewardBursts);
@@ -1203,6 +1412,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       context.clearRect(0, 0, canvas.width, canvas.height);
       state.particles.length = 0;
       state.rewardBursts.length = 0;
+      state.blackHoleAttractionParticles.length = 0;
       state.trails.length = 0;
     },
   };
