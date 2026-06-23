@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
 
+$port = 5174
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $repoRoot ".codex\lan-access"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -25,10 +26,6 @@ function Test-PortOpen {
   }
 }
 
-if (Test-PortOpen -Port 5173) {
-  exit 0
-}
-
 $nodeCandidates = @(
   Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
   "C:\Users\happyelements\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
@@ -51,16 +48,45 @@ if (-not (Test-Path $viteEntry)) {
 $stdoutLog = Join-Path $logDir "dev-server.out.log"
 $stderrLog = Join-Path $logDir "dev-server.err.log"
 
-Start-Process -FilePath $nodeExe `
-  -ArgumentList @(
-    $viteEntry,
-    "--host",
-    "0.0.0.0",
-    "--port",
-    "5173",
-    "--strictPort"
-  ) `
-  -WorkingDirectory $repoRoot `
-  -WindowStyle Hidden `
-  -RedirectStandardOutput $stdoutLog `
-  -RedirectStandardError $stderrLog
+function Start-ViteServer {
+  return Start-Process -FilePath $nodeExe `
+    -ArgumentList @(
+      $viteEntry,
+      "--host",
+      "0.0.0.0",
+      "--port",
+      $port,
+      "--strictPort"
+    ) `
+    -WorkingDirectory $repoRoot `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog `
+    -PassThru
+}
+
+while ($true) {
+  if (Test-PortOpen -Port $port) {
+    Start-Sleep -Seconds 5
+    continue
+  }
+
+  $process = Start-ViteServer
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+
+  while ([DateTime]::UtcNow -lt $deadline) {
+    if (Test-PortOpen -Port $port) {
+      break
+    }
+
+    if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
+      break
+    }
+
+    Start-Sleep -Milliseconds 250
+  }
+
+  if (-not (Test-PortOpen -Port $port)) {
+    Start-Sleep -Seconds 3
+  }
+}
