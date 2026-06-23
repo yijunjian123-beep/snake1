@@ -78,6 +78,7 @@ interface RenderState {
   previousScore: number | null;
   previousPhase: GameSnapshot["phase"] | null;
   previousSnakeHeadKey: string | null;
+  previousWallGraceKey: string | null;
   previousFoods: GridCell[];
   shake: ShakeState;
 }
@@ -161,6 +162,7 @@ function createRenderState(): RenderState {
     previousScore: null,
     previousPhase: null,
     previousSnakeHeadKey: null,
+    previousWallGraceKey: null,
     previousFoods: [],
     shake: {
       time: 0,
@@ -345,6 +347,29 @@ function getSpeedCueStrength(snapshot: GameSnapshot): number {
   return fade * fade;
 }
 
+function getSpeedCueIntroStrength(snapshot: GameSnapshot, time: number): number {
+  if (!snapshot.speedCue || snapshot.speedCue.mode !== snapshot.speedMode) {
+    return 0;
+  }
+
+  const introDurationSeconds = 0.15;
+  const progress = clamp((time - snapshot.speedCue.startedAt) / introDurationSeconds, 0, 1);
+
+  return easeOutCubic(progress);
+}
+
+function getSnakeBrightnessScale(speedMode: SpeedMode): number {
+  return speedMode === "base" ? 0.85 : 1;
+}
+
+function scaleAlpha(value: number, scale: number): number {
+  return Math.max(0, Math.min(1, value * scale));
+}
+
+function scaleLightness(value: number, scale: number): number {
+  return Math.max(0, Math.min(100, value * scale));
+}
+
 function getBlackHoleAttractionRange(grid: GridMetrics, blackHole: BlackHole): number {
   return grid.cellSize * (getBlackHoleInfluenceRadiusCells(blackHole) + 0.5);
 }
@@ -421,6 +446,10 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   const enteredGameOver = snapshot.phase === "gameOver" && state.previousPhase !== "gameOver";
   const enteredPlaying = snapshot.phase === "playing" && state.previousPhase !== "playing";
   const alertVisible = snapshot.phase === "playing" && snapshot.blackHoleAlert !== null;
+  const wallGraceKey = snapshot.wallGrace
+    ? `${snapshot.wallGrace.direction}:${snapshot.wallGrace.startedAt}:${snapshot.wallGrace.expiresAt}`
+    : null;
+  const enteredWallGrace = wallGraceKey !== null && wallGraceKey !== state.previousWallGraceKey;
 
   if (enteredPlaying && snapshot.blackHoleAlert === null) {
     state.blackHoleAlert = null;
@@ -492,6 +521,10 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
     triggerShake(state, 7.2, 0.28, "impact");
   }
 
+  if (enteredWallGrace && !prefersReducedMotion()) {
+    triggerShake(state, 1.45, 0.1, "impact");
+  }
+
   if (snapshot.blackHoles.length > 0 && headCenter) {
     for (const blackHole of snapshot.blackHoles) {
       if (!isBlackHoleActive(blackHole, time)) {
@@ -534,6 +567,7 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   state.previousScore = snapshot.score;
   state.previousPhase = snapshot.phase;
   state.previousSnakeHeadKey = headKey;
+  state.previousWallGraceKey = wallGraceKey;
   state.previousFoods = snapshot.foods.map((food) => ({ ...food }));
 }
 
@@ -849,6 +883,87 @@ function drawFood(context: CanvasRenderingContext2D, snapshot: GameSnapshot, tim
   context.restore();
 }
 
+export function drawWallGraceWarning(context: CanvasRenderingContext2D, snapshot: GameSnapshot, time: number): void {
+  const grace = snapshot.wallGrace;
+
+  if (snapshot.phase !== "playing" || !grace) {
+    return;
+  }
+
+  const { grid } = snapshot;
+  const width = grid.columns * grid.cellSize;
+  const height = grid.rows * grid.cellSize;
+  const duration = Math.max(1, grace.expiresAt - grace.startedAt);
+  const progress = clamp((time * 1000 - grace.startedAt) / duration, 0, 1);
+  const pulse = prefersReducedMotion() ? 1 : 0.68 + Math.sin(time * 24.5) * 0.32;
+  const alpha = (1 - progress) * pulse;
+  const borderAlpha = Math.min(1, 0.2 + alpha * 0.5);
+  const bandSize = Math.max(10, grid.cellSize * 0.82);
+  const edgeLine = Math.max(1.5, grid.cellSize * 0.09);
+  const left = grid.offsetX;
+  const top = grid.offsetY;
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.shadowColor = "rgba(255, 82, 82, 0.96)";
+  context.shadowBlur = Math.max(12, grid.cellSize * 0.9) * alpha;
+  context.strokeStyle = `rgba(255, 82, 82, ${borderAlpha})`;
+  context.lineWidth = Math.max(1.6, grid.cellSize * 0.08);
+  context.strokeRect(left - 0.5, top - 0.5, width + 1, height + 1);
+
+  context.fillStyle = `rgba(255, 43, 214, ${0.06 + alpha * 0.08})`;
+  context.fillRect(left - 8, top - 8, width + 16, height + 16);
+
+  switch (grace.direction) {
+    case "up": {
+      const gradient = context.createLinearGradient(0, top - bandSize, 0, top + bandSize * 0.3);
+      gradient.addColorStop(0, `rgba(255, 43, 214, ${alpha * 0.74})`);
+      gradient.addColorStop(0.45, `rgba(255, 82, 82, ${alpha * 0.5})`);
+      gradient.addColorStop(1, "rgba(255, 82, 82, 0)");
+      context.fillStyle = gradient;
+      context.fillRect(left - 2, top - bandSize, width + 4, bandSize);
+      context.fillStyle = `rgba(255, 255, 255, ${alpha * 0.22})`;
+      context.fillRect(left, top - edgeLine * 0.5, width, edgeLine);
+      break;
+    }
+    case "down": {
+      const gradient = context.createLinearGradient(0, top + height + bandSize, 0, top + height - bandSize * 0.3);
+      gradient.addColorStop(0, `rgba(255, 43, 214, ${alpha * 0.74})`);
+      gradient.addColorStop(0.45, `rgba(255, 82, 82, ${alpha * 0.5})`);
+      gradient.addColorStop(1, "rgba(255, 82, 82, 0)");
+      context.fillStyle = gradient;
+      context.fillRect(left - 2, top + height, width + 4, bandSize);
+      context.fillStyle = `rgba(255, 255, 255, ${alpha * 0.22})`;
+      context.fillRect(left, top + height - edgeLine * 0.5, width, edgeLine);
+      break;
+    }
+    case "left": {
+      const gradient = context.createLinearGradient(left - bandSize, 0, left + bandSize * 0.3, 0);
+      gradient.addColorStop(0, `rgba(255, 43, 214, ${alpha * 0.74})`);
+      gradient.addColorStop(0.45, `rgba(255, 82, 82, ${alpha * 0.5})`);
+      gradient.addColorStop(1, "rgba(255, 82, 82, 0)");
+      context.fillStyle = gradient;
+      context.fillRect(left - bandSize, top - 2, bandSize, height + 4);
+      context.fillStyle = `rgba(255, 255, 255, ${alpha * 0.22})`;
+      context.fillRect(left - edgeLine * 0.5, top, edgeLine, height);
+      break;
+    }
+    case "right": {
+      const gradient = context.createLinearGradient(left + width + bandSize, 0, left + width - bandSize * 0.3, 0);
+      gradient.addColorStop(0, `rgba(255, 43, 214, ${alpha * 0.74})`);
+      gradient.addColorStop(0.45, `rgba(255, 82, 82, ${alpha * 0.5})`);
+      gradient.addColorStop(1, "rgba(255, 82, 82, 0)");
+      context.fillStyle = gradient;
+      context.fillRect(left + width, top - 2, bandSize, height + 4);
+      context.fillStyle = `rgba(255, 255, 255, ${alpha * 0.22})`;
+      context.fillRect(left + width - edgeLine * 0.5, top, edgeLine, height);
+      break;
+    }
+  }
+
+  context.restore();
+}
+
 function drawBlackHole(context: CanvasRenderingContext2D, snapshot: GameSnapshot, blackHole: BlackHole, time: number): void {
   const { grid } = snapshot;
   const variant = getBlackHoleVariant(blackHole.kind);
@@ -990,9 +1105,9 @@ function drawSnakePathGlow(
   context: CanvasRenderingContext2D,
   grid: GridMetrics,
   snake: readonly GridCell[],
+  snapshot: GameSnapshot,
   time: number,
   speedMode: SpeedMode,
-  cueStrength: number,
 ): void {
   if (snake.length < 2) {
     return;
@@ -1000,6 +1115,9 @@ function drawSnakePathGlow(
 
   const speedTone = getSpeedTone(speedMode);
   const modeIntensity = speedMode === "boost" ? 1.18 : speedMode === "accelerate" ? 1.08 : speedMode === "brake" ? 1.12 : 1;
+  const snakeBrightness = getSnakeBrightnessScale(speedMode);
+  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
+  const cueVisualStrength = getSpeedCueStrength(snapshot) * cueIntroStrength;
 
   context.save();
   context.globalCompositeOperation = "lighter";
@@ -1020,27 +1138,27 @@ function drawSnakePathGlow(
     }
 
     const pulse = 0.65 + Math.sin(time * 4.6) * 0.35;
-    const cueBoost = 1 + cueStrength * 0.3;
-    context.globalAlpha = (pass === 0 ? 0.32 : 0.82) * cueBoost;
+    const cueBoost = 1 + cueVisualStrength * 0.3;
+    context.globalAlpha = (pass === 0 ? 0.32 : 0.82) * cueBoost * snakeBrightness;
     context.shadowColor = pass === 0 ? speedTone.glow : speedTone.trail;
-    context.shadowBlur = (pass === 0 ? 26 : 16) * cueBoost * modeIntensity;
+    context.shadowBlur = (pass === 0 ? 26 : 16) * cueBoost * modeIntensity * snakeBrightness;
     context.strokeStyle =
       pass === 0
         ? speedMode === "base"
-          ? "rgba(0, 245, 255, 0.34)"
+          ? `rgba(0, 245, 255, ${0.34 * snakeBrightness})`
           : speedMode === "brake"
             ? "rgba(255, 74, 74, 0.42)"
             : speedMode === "boost"
               ? "rgba(255, 255, 255, 0.42)"
               : "rgba(0, 245, 255, 0.42)"
         : speedMode === "base"
-          ? `rgba(219, 255, 82, ${0.22 + pulse * 0.16})`
+          ? `rgba(219, 255, 82, ${scaleAlpha(0.22 + pulse * 0.16, snakeBrightness)})`
           : speedMode === "brake"
             ? `rgba(255, 138, 138, ${0.2 + pulse * 0.16})`
             : speedMode === "boost"
               ? `rgba(219, 255, 82, ${0.18 + pulse * 0.18})`
               : `rgba(144, 251, 255, ${0.2 + pulse * 0.16})`;
-    context.lineWidth = grid.cellSize * (pass === 0 ? 0.95 : 0.42) * cueBoost * modeIntensity;
+    context.lineWidth = grid.cellSize * (pass === 0 ? 0.95 : 0.42) * cueBoost * modeIntensity * snakeBrightness;
     context.stroke();
   }
 
@@ -1057,15 +1175,17 @@ function drawSpeedPulse(context: CanvasRenderingContext2D, snapshot: GameSnapsho
   const tone = getSpeedTone(cue.mode);
   const center = cellCenter(snapshot.grid, cue.anchor);
   const cueStrength = getSpeedCueStrength(snapshot);
+  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
+  const cueVisualStrength = cueStrength * cueIntroStrength;
   const pulse = prefersReducedMotion() ? 1 : 0.92 + Math.sin(time * 10.2 + cue.startedAt * 0.004) * 0.08;
-  const radius = snapshot.grid.cellSize * (0.38 + cueStrength * 0.92);
+  const radius = snapshot.grid.cellSize * (0.24 + cueVisualStrength * 1.06);
 
   context.save();
   context.globalCompositeOperation = "lighter";
   context.translate(center.x, center.y);
-  context.globalAlpha = cueStrength * pulse;
+  context.globalAlpha = cueVisualStrength * pulse;
   context.shadowColor = tone.glow;
-  context.shadowBlur = snapshot.grid.cellSize * (0.9 + cueStrength * 1.4);
+  context.shadowBlur = snapshot.grid.cellSize * (0.18 + cueVisualStrength * 1.24);
 
   const fill = context.createRadialGradient(0, 0, 0, 0, 0, radius * 1.25);
   fill.addColorStop(0, tone.head);
@@ -1078,7 +1198,7 @@ function drawSpeedPulse(context: CanvasRenderingContext2D, snapshot: GameSnapsho
   context.arc(0, 0, radius * 1.12, 0, Math.PI * 2);
   context.fill();
 
-  context.globalAlpha = cueStrength * 0.76;
+  context.globalAlpha = cueVisualStrength * 0.76;
   context.strokeStyle = tone.border;
   context.lineWidth = Math.max(1, snapshot.grid.cellSize * 0.05);
   context.beginPath();
@@ -1271,13 +1391,21 @@ function drawBlackHoleAlert(
   context.restore();
 }
 
-function drawSnakeTrail(context: CanvasRenderingContext2D, snapshot: GameSnapshot, trails: readonly TrailSample[]): void {
+function drawSnakeTrail(
+  context: CanvasRenderingContext2D,
+  snapshot: GameSnapshot,
+  trails: readonly TrailSample[],
+  time: number,
+): void {
   const { grid, speedMode } = snapshot;
   const cellGap = Math.max(2, grid.cellSize * 0.12);
   const segmentSize = grid.cellSize - cellGap * 2;
   const speedTone = getSpeedTone(speedMode);
   const tintStrength = speedMode === "base" ? 0 : Math.min(1, Math.abs(snapshot.speedMultiplier - 1) / 0.67);
   const cueStrength = getSpeedCueStrength(snapshot);
+  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
+  const cueVisualStrength = cueStrength * cueIntroStrength;
+  const snakeBrightness = getSnakeBrightnessScale(speedMode);
 
   context.save();
   context.globalCompositeOperation = "lighter";
@@ -1295,11 +1423,16 @@ function drawSnakeTrail(context: CanvasRenderingContext2D, snapshot: GameSnapsho
       const age = sample.cells.length <= 1 ? 1 : 1 - index / (sample.cells.length - 1);
       const x = grid.offsetX + segment.column * grid.cellSize + cellGap;
       const y = grid.offsetY + segment.row * grid.cellSize + cellGap;
+      const bodyLightness = speedMode === "base" ? scaleLightness(50 + age * 24, snakeBrightness) : 50 + age * 24;
 
-      context.globalAlpha = alpha * (0.06 + age * 0.18) * (1 + tintStrength * 0.08 + cueStrength * 0.14);
+      context.globalAlpha = alpha * (0.06 + age * 0.18) * (1 + tintStrength * 0.08 + cueVisualStrength * 0.14);
       context.shadowColor = index === 0 ? speedTone.head : speedMode === "base" ? "#00f5ff" : speedTone.trail;
-      context.shadowBlur = (18 + tintStrength * 8 + cueStrength * 10) * alpha;
-      context.fillStyle = index === 0 ? speedTone.head : speedMode === "base" ? `hsl(${184 + age * 76} 100% 58%)` : speedTone.body;
+      context.shadowBlur = (18 + tintStrength * 8 + cueVisualStrength * 10) * alpha * snakeBrightness;
+      context.fillStyle = index === 0
+        ? speedTone.head
+        : speedMode === "base"
+          ? `hsl(${184 + age * 76} 100% ${bodyLightness}%)`
+          : speedTone.body;
       fillRoundedRect(context, x, y, segmentSize, segmentSize, index === 0 ? 9 : 7);
     }
   }
@@ -1315,8 +1448,11 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
   const speedTone = getSpeedTone(speedMode);
   const tintStrength = speedMode === "base" ? 0 : Math.min(1, Math.abs(snapshot.speedMultiplier - 1) / 0.67);
   const cueStrength = getSpeedCueStrength(snapshot);
+  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
+  const cueVisualStrength = cueStrength * cueIntroStrength;
+  const snakeBrightness = getSnakeBrightnessScale(speedMode);
 
-  drawSnakePathGlow(context, grid, snake, time, speedMode, cueStrength);
+  drawSnakePathGlow(context, grid, snake, snapshot, time, speedMode);
 
   context.save();
   context.globalCompositeOperation = "lighter";
@@ -1334,12 +1470,11 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
     const x = grid.offsetX + segment.column * grid.cellSize + cellGap;
     const y = grid.offsetY + segment.row * grid.cellSize + cellGap;
     const pulse = 0.72 + Math.sin(time * 5.2 + index * 0.55) * 0.28;
-
-    context.globalAlpha = isGameOver ? 0.56 : 0.78 + age * 0.22 + tintStrength * 0.06 + cueStrength * 0.08;
+    context.globalAlpha = isGameOver ? 0.56 : 0.78 + age * 0.22 + tintStrength * 0.06 + cueVisualStrength * 0.08;
     context.shadowColor = isHead ? speedTone.head : speedMode === "base" ? "#00f5ff" : speedTone.trail;
     context.shadowBlur = isHead
-      ? 30 + tintStrength * 8 + cueStrength * 10
-      : 17 + pulse * 8 + tintStrength * 5 + cueStrength * 4;
+      ? (30 + tintStrength * 8 + cueVisualStrength * 10) * snakeBrightness
+      : (17 + pulse * 8 + tintStrength * 5 + cueVisualStrength * 4) * snakeBrightness;
 
     if (isHead) {
       const headGradient = context.createRadialGradient(
@@ -1357,7 +1492,7 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
       fillRoundedRect(context, x - 1, y - 1, segmentSize + 2, segmentSize + 2, 9);
 
       if (speedMode !== "base") {
-        context.globalAlpha = isGameOver ? 0.22 : 0.42 + tintStrength * 0.18 + cueStrength * 0.1;
+        context.globalAlpha = isGameOver ? 0.22 : 0.42 + tintStrength * 0.18 + cueVisualStrength * 0.1;
         context.strokeStyle = speedTone.glow;
         context.lineWidth = Math.max(1, grid.cellSize * 0.05);
         context.beginPath();
@@ -1365,11 +1500,13 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
         context.stroke();
       }
     } else {
-      context.fillStyle = speedMode === "base" ? `hsl(${178 + age * 76} 100% ${50 + age * 24}%)` : speedTone.body;
+      context.fillStyle = speedMode === "base"
+        ? `hsl(${178 + age * 76} 100% ${scaleLightness(50 + age * 24, snakeBrightness)}%)`
+        : speedTone.body;
       fillRoundedRect(context, x, y, segmentSize, segmentSize, 7);
 
-      context.globalAlpha = isGameOver ? 0.24 : 0.34 + age * 0.22 + cueStrength * 0.05;
-      context.fillStyle = speedMode === "base" ? "rgba(255, 255, 255, 0.72)" : speedTone.text;
+      context.globalAlpha = isGameOver ? 0.24 : 0.34 + age * 0.22 + cueVisualStrength * 0.05;
+      context.fillStyle = speedMode === "base" ? `rgba(255, 255, 255, ${scaleAlpha(0.72, snakeBrightness)})` : speedTone.text;
       fillRoundedRect(
         context,
         x + segmentSize * 0.22,
@@ -1709,8 +1846,9 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       context.save();
       context.translate(shakeOffset.x, shakeOffset.y);
       drawBoard(context, frame.snapshot, time);
+      drawWallGraceWarning(context, frame.snapshot, time);
       drawBlackHoles(context, frame.snapshot, time);
-      drawSnakeTrail(context, frame.snapshot, state.trails);
+      drawSnakeTrail(context, frame.snapshot, state.trails, time);
       drawBlackHoleAttractionParticles(context, state.blackHoleAttractionParticles);
       context.restore();
 

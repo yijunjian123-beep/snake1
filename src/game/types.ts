@@ -79,6 +79,12 @@ export interface SpeedCue {
   fadeProgress: number;
 }
 
+export interface WallGraceSnapshot {
+  direction: Direction;
+  startedAt: number;
+  expiresAt: number;
+}
+
 export interface GameSnapshot {
   phase: GamePhase;
   grid: GridMetrics;
@@ -93,6 +99,7 @@ export interface GameSnapshot {
   speedMode: SpeedMode;
   speedMultiplier: number;
   speedCue: SpeedCue | null;
+  wallGrace: WallGraceSnapshot | null;
 }
 
 export interface FrameInfo {

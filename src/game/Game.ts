@@ -59,14 +59,15 @@ const OPPOSITE_DIRECTIONS: Record<Direction, Direction> = {
   left: "right",
 };
 
-const BASE_STEP_MS = 144;
+const BASE_STEP_MS = 180;
 const BOOST_STEP_RATIO = 0.6;
-const ACCELERATE_SPEED_MULTIPLIER = 1.3;
-const BRAKE_SPEED_MULTIPLIER = 0.5;
+const ACCELERATE_SPEED_MULTIPLIER = 2;
+const BRAKE_SPEED_MULTIPLIER = 0.35;
 const SPEED_CUE_DURATION_MS = 1500;
 const MAX_DIRECTION_QUEUE_LENGTH = 2;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
+const WALL_GRACE_MS = 110;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
 const MIN_ROWS = 10;
@@ -136,6 +137,12 @@ interface SpeedCueState {
   startedAt: number;
 }
 
+interface WallGraceState {
+  direction: Direction;
+  startedAt: number;
+  expiresAt: number;
+}
+
 interface MovementSpeedState {
   mode: SpeedMode;
   multiplier: number;
@@ -161,6 +168,7 @@ export class Game {
   private blackHoleGravityState: BlackHoleGravityState = { key: null, charge: 0 };
   private blackHoleCue: GameSnapshot["blackHoleCue"] = null;
   private blackHoleRecoveryDirection: Direction | null = null;
+  private wallGrace: WallGraceState | null = null;
   private birthCell: GridCell = { column: 0, row: 0 };
   private direction: Direction = "right";
   private directionQueue: Direction[] = [];
@@ -237,22 +245,31 @@ export class Game {
     if (this.phase === "playing") {
       this.playElapsed += delta;
       this.stepAccumulator += delta;
+      this.updateWallGraceState();
 
-      let movementSpeed = this.getMovementSpeedState();
-      this.updateSpeedCueState(movementSpeed);
-
-      while (this.phase === "playing") {
-        const stepMs = movementSpeed.stepMs;
-
-        if (this.stepAccumulator < stepMs) {
-          break;
-        }
-
-        this.advanceSnake();
-        this.stepAccumulator -= stepMs;
-
-        movementSpeed = this.getMovementSpeedState();
+      if (this.phase === "playing") {
+        let movementSpeed = this.getMovementSpeedState();
         this.updateSpeedCueState(movementSpeed);
+
+        if (!this.wallGrace) {
+          while (this.phase === "playing") {
+            const stepMs = movementSpeed.stepMs;
+
+            if (this.stepAccumulator < stepMs) {
+              break;
+            }
+
+            this.advanceSnake();
+            this.stepAccumulator -= stepMs;
+
+            if (this.phase !== "playing" || this.wallGrace) {
+              break;
+            }
+
+            movementSpeed = this.getMovementSpeedState();
+            this.updateSpeedCueState(movementSpeed);
+          }
+        }
       }
     }
 
@@ -530,6 +547,31 @@ export class Game {
       return;
     }
 
+    if (this.wallGrace) {
+      if (direction === OPPOSITE_DIRECTIONS[this.direction]) {
+        return;
+      }
+
+      const head = this.snake[0];
+
+      if (!head) {
+        return;
+      }
+
+      const delta = DIRECTION_DELTAS[direction];
+      const nextCell: GridCell = {
+        column: head.column + delta.column,
+        row: head.row + delta.row,
+      };
+
+      if (this.isOutOfBounds(nextCell)) {
+        return;
+      }
+
+      this.directionQueue = [direction];
+      return;
+    }
+
     const lastQueuedDirection = this.directionQueue[this.directionQueue.length - 1] ?? this.direction;
 
     if (
@@ -562,6 +604,7 @@ export class Game {
     this.blackHoleAlert = null;
     this.blackHoleCue = null;
     this.blackHoleRecoveryDirection = null;
+    this.wallGrace = null;
     this.snake = this.createStartingSnake();
     this.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
     this.blackHoles = [];
@@ -582,7 +625,7 @@ export class Game {
   private createFoods(): GridCell[] {
     const foods: GridCell[] = [];
 
-    while (foods.length < 2) {
+    while (foods.length < 3) {
       const candidate = this.spawnFood(foods);
 
       if (!candidate) {
@@ -614,7 +657,7 @@ export class Game {
   }
 
   private refillFoods(): void {
-    while (this.foods.length < 2) {
+    while (this.foods.length < 3) {
       const candidate = this.spawnFood();
 
       if (!candidate) {
@@ -633,75 +676,73 @@ export class Game {
       return;
     }
 
-    this.movementTick += 1;
-    const currentTime = this.elapsed / 1000;
     const recoveryDirection = this.blackHoleRecoveryDirection;
-    const shouldRecoverStraight = recoveryDirection !== null;
-    let intendedDirection: Direction;
 
-    if (shouldRecoverStraight) {
-      intendedDirection = recoveryDirection;
-    } else {
-      intendedDirection = this.directionQueue[0] ?? this.direction;
-    }
-
-    if (shouldRecoverStraight) {
+    if (recoveryDirection !== null) {
+      this.movementTick += 1;
       this.blackHoleRecoveryDirection = null;
       this.blackHoleGravityState = { key: null, charge: 0 };
       this.blackHoleCue = null;
-      this.direction = intendedDirection;
-    } else if (this.directionQueue.length > 0) {
-      this.directionQueue.shift();
-
-      const resolution = resolveBlackHoleMovement(
-        head,
-        intendedDirection,
-        this.direction,
-        this.blackHoles,
-        currentTime,
-        this.blackHoleGravityState,
-      );
-
-      this.blackHoleGravityState = resolution.nextGravityState;
-      this.blackHoleCue = resolution.cue;
-
-      if (resolution.shouldDie) {
-        this.direction = resolution.finalDirection;
-        this.endRun();
-        return;
-      }
-
-      this.direction = resolution.finalDirection;
-
-      if (resolution.shouldPlayPull) {
-        this.blackHoleRecoveryDirection = intendedDirection;
-      }
-    } else {
-      const resolution = resolveBlackHoleMovement(
-        head,
-        intendedDirection,
-        this.direction,
-        this.blackHoles,
-        currentTime,
-        this.blackHoleGravityState,
-      );
-
-      this.blackHoleGravityState = resolution.nextGravityState;
-      this.blackHoleCue = resolution.cue;
-
-      if (resolution.shouldDie) {
-        this.direction = resolution.finalDirection;
-        this.endRun();
-        return;
-      }
-
-      this.direction = resolution.finalDirection;
-
-      if (resolution.shouldPlayPull) {
-        this.blackHoleRecoveryDirection = intendedDirection;
-      }
+      this.direction = recoveryDirection;
+      this.commitSnakeStep();
+      return;
     }
 
+    const intendedDirection = this.directionQueue[0] ?? this.direction;
+
+    if (this.directionQueue.length > 0) {
+      this.directionQueue.shift();
+    }
+
+    this.advanceSnakeFromDirection(intendedDirection);
+  }
+
+  private advanceSnakeFromDirection(intendedDirection: Direction): void {
+    const head = this.snake[0];
+
+    if (!head) {
+      this.endRun();
+      return;
+    }
+
+    this.movementTick += 1;
+    const currentTime = this.elapsed / 1000;
+    const resolution = resolveBlackHoleMovement(
+      head,
+      intendedDirection,
+      this.direction,
+      this.blackHoles,
+      currentTime,
+      this.blackHoleGravityState,
+    );
+
+    this.blackHoleGravityState = resolution.nextGravityState;
+    this.blackHoleCue = resolution.cue;
+
+    if (resolution.shouldDie) {
+      this.direction = resolution.finalDirection;
+      this.endRun();
+      return;
+    }
+
+    this.direction = resolution.finalDirection;
+
+    if (resolution.shouldPlayPull) {
+      this.blackHoleRecoveryDirection = intendedDirection;
+    }
+
+    this.commitSnakeStep();
+  }
+
+  private commitSnakeStep(): void {
+    const head = this.snake[0];
+
+    if (!head) {
+      this.endRun();
+      return;
+    }
+
+    const currentTime = this.elapsed / 1000;
     const delta = DIRECTION_DELTAS[this.direction];
     const nextHead: GridCell = {
       column: head.column + delta.column,
@@ -710,7 +751,12 @@ export class Game {
     const ateFoodIndex = this.foods.findIndex((food) => cellsMatch(nextHead, food));
     const ateFood = ateFoodIndex !== -1;
 
-    if (this.isOutOfBounds(nextHead) || this.collidesWithSelf(nextHead, ateFood)) {
+    if (this.isOutOfBounds(nextHead)) {
+      this.startWallGrace(this.direction);
+      return;
+    }
+
+    if (this.collidesWithSelf(nextHead, ateFood)) {
       this.endRun();
       return;
     }
@@ -778,6 +824,74 @@ export class Game {
     return this.blackHoles.some((blackHole) => isBlackHoleCollision(cell, blackHole, this.elapsed / 1000));
   }
 
+  private startWallGrace(direction: Direction): void {
+    if (this.wallGrace) {
+      return;
+    }
+
+    const now = this.elapsed;
+    this.wallGrace = {
+      direction,
+      startedAt: now,
+      expiresAt: now + WALL_GRACE_MS,
+    };
+  }
+
+  private updateWallGraceState(): void {
+    if (!this.wallGrace) {
+      return;
+    }
+
+    const recoveryDirection = this.getWallGraceRecoveryDirection();
+
+    if (!recoveryDirection) {
+      if (this.elapsed >= this.wallGrace.expiresAt) {
+        this.endRun();
+      }
+
+      return;
+    }
+
+    this.wallGrace = null;
+    this.stepAccumulator = 0;
+    this.advanceSnakeFromDirection(recoveryDirection);
+  }
+
+  private getWallGraceRecoveryDirection(): Direction | null {
+    const head = this.snake[0];
+
+    if (!head) {
+      return null;
+    }
+
+    for (let index = 0; index < this.directionQueue.length; index += 1) {
+      const direction = this.directionQueue[index];
+
+      if (!direction) {
+        continue;
+      }
+
+      if (direction === OPPOSITE_DIRECTIONS[this.direction]) {
+        continue;
+      }
+
+      const delta = DIRECTION_DELTAS[direction];
+      const candidate: GridCell = {
+        column: head.column + delta.column,
+        row: head.row + delta.row,
+      };
+
+      if (this.isOutOfBounds(candidate)) {
+        continue;
+      }
+
+      this.directionQueue.splice(0, index + 1);
+      return direction;
+    }
+
+    return null;
+  }
+
   private updateBlackHoleAlert(currentTime: number): void {
     const head = this.snake[0];
     this.blackHoleAlert = head ? resolveBlackHoleAlert(head, this.blackHoles, currentTime) : null;
@@ -829,6 +943,7 @@ export class Game {
     this.isBoosting = false;
     this.stepAccumulator = 0;
     this.blackHoleRecoveryDirection = null;
+    this.wallGrace = null;
     this.speedCue = null;
     this.lastMovementSpeedMode = "base";
     this.saveHighScoreIfNeeded();
@@ -899,6 +1014,11 @@ export class Game {
       speedMode: movementSpeed.mode,
       speedMultiplier: movementSpeed.multiplier,
       speedCue: this.getSpeedCueSnapshot(),
+      wallGrace: this.wallGrace
+        ? {
+            ...this.wallGrace,
+          }
+        : null,
     };
   }
 

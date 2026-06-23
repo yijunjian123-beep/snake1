@@ -383,7 +383,9 @@ button {
   width: min(100%, 368px);
   justify-self: stretch;
   margin: 0;
-  padding-top: 10px;
+  padding-top: 6px;
+  display: grid;
+  gap: 4px;
   border-top: 1px solid rgba(143, 251, 255, 0.18);
   text-align: left;
 }
@@ -422,12 +424,12 @@ button {
 .operation-row span,
 .operation-note {
   color: var(--muted);
-  font-size: 0.72rem;
-  line-height: 1.35;
+  font-size: 0.68rem;
+  line-height: 1.22;
 }
 
 .operation-note {
-  margin: 8px 0 0;
+  margin: 0;
 }
 
 .diagnostic-strip {
@@ -738,7 +740,8 @@ button {
 
   .operation-guide {
     width: min(100%, 298px);
-    padding-top: 8px;
+    padding-top: 6px;
+    gap: 4px;
   }
 
   .operation-guide-title {
@@ -758,7 +761,8 @@ button {
 
   .operation-row span,
   .operation-note {
-    font-size: 0.63rem;
+    font-size: 0.68rem;
+    line-height: 1.22;
   }
 
   .primary-action {
