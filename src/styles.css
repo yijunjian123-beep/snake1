@@ -78,26 +78,22 @@ button {
 .hud-strip {
   position: absolute;
   top: max(16px, env(safe-area-inset-top));
-  left: max(16px, env(safe-area-inset-left));
-  right: max(16px, env(safe-area-inset-right));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 52px;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
+  left: 50%;
+  width: min(calc(100vw - 32px), 760px);
+  padding: 12px 12px 12px;
+  border: 1px solid rgba(143, 251, 255, 0.22);
   border-radius: 8px;
   background:
     linear-gradient(180deg, var(--glass-top), var(--glass-bottom)),
-    linear-gradient(135deg, rgba(14, 25, 55, 0.76), rgba(9, 10, 24, 0.5));
+    linear-gradient(135deg, rgba(14, 25, 55, 0.78), rgba(9, 10, 24, 0.54));
   box-shadow:
-    0 0 34px rgba(0, 245, 255, 0.16),
-    0 10px 34px rgba(0, 0, 0, 0.26),
+    0 0 38px rgba(0, 245, 255, 0.14),
+    0 12px 34px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 0 24px rgba(255, 43, 214, 0.1);
+    inset 0 0 24px rgba(255, 43, 214, 0.08);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
+  transform: translateX(-50%);
 }
 
 .hud-strip::before {
@@ -112,15 +108,30 @@ button {
   pointer-events: none;
 }
 
+.hud-topline,
 .brand-lockup,
-.status-cluster,
+.hud-cards,
 .diagnostic-strip {
   display: flex;
   align-items: center;
 }
 
+.hud-topline {
+  position: relative;
+  z-index: 1;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
 .brand-lockup {
   gap: 9px;
+  min-width: 0;
+}
+
+.brand-copy {
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -144,7 +155,7 @@ button {
 }
 
 .brand-title {
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   font-weight: 800;
   letter-spacing: 0;
   white-space: nowrap;
@@ -153,46 +164,116 @@ button {
 
 .brand-subtitle {
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.7rem;
+  line-height: 1.1;
   white-space: nowrap;
 }
 
-.status-cluster {
+.hud-cards {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
-  flex: 1 1 auto;
   min-width: 0;
-  justify-content: center;
 }
 
-.stat-chip {
+.hud-card {
+  display: grid;
   min-width: 0;
-  flex: 1 1 0;
-  padding: 5px 7px;
+  min-height: 86px;
+  padding: 10px 12px 9px;
   border: 1px solid rgba(143, 251, 255, 0.2);
   border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.02)),
-    rgba(0, 0, 0, 0.2);
+    rgba(0, 0, 0, 0.18);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     inset 0 0 16px rgba(0, 245, 255, 0.06);
 }
 
-.stat-chip span,
-.diagnostic-strip span {
+.hud-card--unlock {
+  border-color: rgba(255, 43, 214, 0.26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 18px rgba(255, 43, 214, 0.09);
+}
+
+.hud-card__label,
+.hud-card__subvalue,
+.diagnostic-strip span,
+.hud-ticker__line {
   display: block;
   color: var(--muted);
   font-size: 0.68rem;
   line-height: 1;
 }
 
-.stat-chip strong {
+.hud-card__label {
+  margin-bottom: 8px;
+  color: rgba(247, 251, 255, 0.72);
+  font-size: 0.68rem;
+}
+
+.hud-card__value {
   display: block;
-  margin-top: 4px;
   color: var(--lime);
-  font-size: 1rem;
+  font-size: 1.34rem;
   line-height: 1;
+  font-weight: 800;
   text-shadow: 0 0 12px rgba(219, 255, 82, 0.7);
+  white-space: nowrap;
+}
+
+.hud-card--length .hud-card__value {
+  font-size: clamp(2rem, 3.2vw, 2.55rem);
+}
+
+.hud-card--unlock .hud-card__value {
+  color: var(--text);
+  font-size: clamp(1.04rem, 1.9vw, 1.34rem);
+  text-shadow:
+    0 0 12px rgba(255, 43, 214, 0.36),
+    0 0 20px rgba(0, 245, 255, 0.1);
+}
+
+.hud-card__subvalue {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: clamp(0.98rem, 1.85vw, 1.18rem);
+  line-height: 1.08;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hud-ticker {
+  position: relative;
+  z-index: 1;
+  min-height: 30px;
+  margin-top: 10px;
+  overflow: hidden;
+  text-align: center;
+}
+
+.hud-ticker__line {
+  position: absolute;
+  inset: 0;
+  color: rgba(247, 251, 255, 0.72);
+  font-size: 1.36rem;
+  line-height: 1.12;
+  white-space: nowrap;
+  text-shadow: 0 0 12px rgba(0, 245, 255, 0.18);
+  transition: opacity 180ms linear;
+  will-change: opacity;
+}
+
+.hud-ticker__line--current {
+  opacity: 1;
+}
+
+.hud-ticker__line--next {
+  opacity: 0;
 }
 
 .icon-button,
@@ -208,12 +289,23 @@ button {
 
 .icon-button {
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.02rem;
+  line-height: 1;
+  letter-spacing: 0;
   font-weight: 800;
   box-shadow:
-    0 0 18px rgba(0, 245, 255, 0.12),
+    0 0 16px rgba(0, 245, 255, 0.1),
     inset 0 0 16px rgba(0, 245, 255, 0.12);
+}
+
+.icon-button--quiet {
+  border-color: rgba(143, 251, 255, 0.22);
+  background: rgba(0, 245, 255, 0.07);
 }
 
 .primary-action {
@@ -633,22 +725,51 @@ button {
 
 @media (max-width: 720px) {
   .hud-strip {
-    align-items: stretch;
-    gap: 8px;
+    width: min(calc(100vw - 20px), 700px);
+    padding: 10px 10px 10px;
   }
 
   .brand-subtitle {
     display: none;
   }
 
-  .status-cluster {
-    flex: 1;
-    min-width: 0;
+  .hud-topline {
+    margin-bottom: 8px;
   }
 
-  .stat-chip {
-    min-width: 0;
-    flex: 1;
+  .hud-cards {
+    gap: 6px;
+  }
+
+  .hud-card {
+    min-height: 80px;
+    padding: 9px 10px 8px;
+  }
+
+  .hud-card__label {
+    margin-bottom: 6px;
+    font-size: 0.58rem;
+  }
+
+  .hud-card--length .hud-card__value {
+    font-size: clamp(1.7rem, 5vw, 2.2rem);
+  }
+
+  .hud-card--unlock .hud-card__value {
+    font-size: clamp(0.92rem, 2.7vw, 1.12rem);
+  }
+
+  .hud-card__subvalue {
+    font-size: clamp(0.9rem, 2.4vw, 1.08rem);
+  }
+
+  .hud-ticker {
+    min-height: 26px;
+    margin-top: 8px;
+  }
+
+  .hud-ticker__line {
+    font-size: 1.22rem;
   }
 
   .diagnostic-strip {
@@ -673,16 +794,86 @@ button {
   .diagnostic-strip {
     display: none;
   }
+
+  .hud-strip,
+  .start-panel,
+  .diagnostic-strip,
+  .joystick-ring,
+  .orientation-mask {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+
+  .hud-strip {
+    box-shadow:
+      0 0 24px rgba(0, 245, 255, 0.1),
+      0 10px 26px rgba(0, 0, 0, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 0 14px rgba(255, 43, 214, 0.05);
+  }
+
+  .hud-strip::before {
+    opacity: 0.3;
+  }
+
+  .hud-card {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      inset 0 0 10px rgba(0, 245, 255, 0.04);
+  }
+
+  .start-panel {
+    box-shadow:
+      0 0 42px rgba(255, 43, 214, 0.18),
+      0 0 30px rgba(0, 245, 255, 0.08),
+      0 14px 34px rgba(0, 0, 0, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      inset 0 0 22px rgba(0, 245, 255, 0.06);
+  }
+
+  .start-panel::after {
+    box-shadow:
+      0 0 24px rgba(0, 245, 255, 0.14),
+      inset 0 0 24px rgba(255, 43, 214, 0.08);
+  }
+
+  .icon-button {
+    box-shadow:
+      0 0 10px rgba(0, 245, 255, 0.08),
+      inset 0 0 10px rgba(0, 245, 255, 0.1);
+  }
+
+  .primary-action {
+    box-shadow:
+      0 0 18px rgba(0, 245, 255, 0.24),
+      0 0 30px rgba(219, 255, 82, 0.1),
+      inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  }
+
+  .joystick-ring {
+    box-shadow:
+      0 0 18px rgba(0, 245, 255, 0.16),
+      0 8px 20px rgba(0, 0, 0, 0.22),
+      inset 0 0 18px rgba(255, 43, 214, 0.08);
+  }
+
+  .boost-button {
+    box-shadow:
+      0 0 20px rgba(255, 43, 214, 0.18),
+      0 10px 22px rgba(0, 0, 0, 0.24),
+      inset 0 0 18px rgba(0, 245, 255, 0.08);
+  }
 }
 
 @media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
   .hud-strip {
     top: max(8px, env(safe-area-inset-top));
-    left: max(10px, calc(env(safe-area-inset-left) + 8px));
-    right: max(10px, calc(env(safe-area-inset-right) + 8px));
-    min-height: 44px;
-    padding: 6px 8px;
-    gap: 8px;
+    width: min(calc(100vw - 16px), 720px);
+    padding: 8px 10px 9px;
+  }
+
+  .hud-topline {
+    margin-bottom: 8px;
   }
 
   .brand-mark {
@@ -694,28 +885,48 @@ button {
     font-size: 0.74rem;
   }
 
-  .status-cluster {
+  .brand-subtitle {
+    font-size: 0.6rem;
+  }
+
+  .hud-cards {
     gap: 6px;
   }
 
-  .stat-chip {
-    min-width: 0;
-    flex: 1;
-    padding: 5px 6px;
+  .hud-card {
+    min-height: 76px;
+    padding: 8px 9px 7px;
   }
 
-  .stat-chip span {
+  .hud-card__label {
+    margin-bottom: 5px;
     font-size: 0.56rem;
   }
 
-  .stat-chip strong {
-    margin-top: 3px;
-    font-size: 0.84rem;
+  .hud-card--length .hud-card__value {
+    font-size: clamp(1.45rem, 4.4vw, 1.95rem);
+  }
+
+  .hud-card--unlock .hud-card__value {
+    font-size: clamp(0.84rem, 2.2vw, 1.08rem);
+  }
+
+  .hud-card__subvalue {
+    font-size: clamp(0.82rem, 2.1vw, 1rem);
+  }
+
+  .hud-ticker {
+    min-height: 24px;
+    margin-top: 7px;
+  }
+
+  .hud-ticker__line {
+    font-size: 1.16rem;
   }
 
   .icon-button {
-    width: 34px;
-    height: 34px;
+    width: 32px;
+    height: 32px;
   }
 
   .start-panel {

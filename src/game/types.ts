@@ -6,6 +6,10 @@ export type BlackHoleKind = "small" | "large";
 
 export type BlackHoleBand = "core" | "strong" | "medium" | "weak";
 
+export type StarBeastState = "spawning" | "patrol" | "chase" | "dead";
+
+export type StarBeastDeathCause = "player_body" | "black_hole";
+
 export type InputSource = "keyboard" | "pointer";
 
 export type InputEventKind = "pressed" | "released";
@@ -55,6 +59,67 @@ export interface BlackHole {
   activateAt: number;
 }
 
+export type StarCoreSource = "regular" | "star_beast";
+
+export interface StarBeast {
+  id: number;
+  alive: boolean;
+  body: GridCell[];
+  dir: Direction;
+  length: number;
+  state: StarBeastState;
+  moveTimer: number;
+  aiDecisionCooldown: number;
+  turnCommitTicks: number;
+  spawnGraceTime: number;
+  speedFactor: number;
+  aggroRadius: number;
+  loseAggroRadius: number;
+}
+
+export interface StarCore {
+  id: number;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  spawnTime: number;
+  magnetDelayMs: number;
+  magnetRadius: number;
+  lifetimeMs: number;
+  value: number;
+  source: StarCoreSource;
+  burstOrigin?: GridCell;
+}
+
+export interface StarBeastEffect {
+  id: number;
+  cell: GridCell;
+  createdAt: number;
+  lifetimeMs: number;
+  seed: number;
+  length: number;
+  cause: StarBeastDeathCause;
+}
+
+export interface StarAttractor {
+  id: number;
+  cell: GridCell;
+  spawnTime: number;
+  seed: number;
+}
+
+export interface StarAttractorEffect {
+  id: number;
+  origin: GridCell;
+  target: GridCell;
+  absorbedCells: readonly GridCell[];
+  absorbCount: number;
+  createdAt: number;
+  lifetimeMs: number;
+  seed: number;
+}
+
 export interface BlackHoleAlert {
   blackHole: BlackHole;
   distance: number;
@@ -90,6 +155,11 @@ export interface GameSnapshot {
   grid: GridMetrics;
   snake: readonly GridCell[];
   foods: readonly GridCell[];
+  starAttractors: readonly StarAttractor[];
+  starAttractorEffects: readonly StarAttractorEffect[];
+  starBeasts: readonly StarBeast[];
+  starCores: readonly StarCore[];
+  starBeastEffects: readonly StarBeastEffect[];
   blackHoles: readonly BlackHole[];
   blackHoleAlert: BlackHoleAlert | null;
   blackHoleCue: BlackHoleCue | null;
@@ -105,9 +175,9 @@ export interface GameSnapshot {
 export interface FrameInfo {
   now: number;
   delta: number;
+  frameDelta: number;
   elapsed: number;
   phase: GamePhase;
-  size: CanvasSize;
   snapshot: GameSnapshot;
 }
 
@@ -143,15 +213,19 @@ export interface Renderer {
   resize(): CanvasSize;
   render(frame: FrameInfo): void;
   getSize(): CanvasSize;
+  recordFrameTime(delta: number): void;
   destroy(): void;
 }
 
 export interface GameUiElements {
   root: HTMLElement;
+  hudStrip: HTMLElement;
   startPanel: HTMLElement;
-  scoreLabel: HTMLElement;
   lengthLabel: HTMLElement;
-  bestLabel: HTMLElement;
+  unlockTitleLabel: HTMLElement;
+  unlockValueLabel: HTMLElement;
+  tickerCurrentLabel: HTMLElement;
+  tickerNextLabel: HTMLElement;
   stateLabel: HTMLElement;
   fpsLabel: HTMLElement;
   sizeLabel: HTMLElement;

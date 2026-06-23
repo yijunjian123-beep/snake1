@@ -14,10 +14,13 @@ function queryRequired<T extends Element>(selector: string): T {
 const canvas = queryRequired<HTMLCanvasElement>("#game-canvas");
 const ui: GameUiElements = {
   root: queryRequired<HTMLElement>("#app"),
+  hudStrip: queryRequired<HTMLElement>(".hud-strip"),
   startPanel: queryRequired<HTMLElement>("#start-panel"),
-  scoreLabel: queryRequired<HTMLElement>("#score-label"),
   lengthLabel: queryRequired<HTMLElement>("#length-label"),
-  bestLabel: queryRequired<HTMLElement>("#best-label"),
+  unlockTitleLabel: queryRequired<HTMLElement>("#unlock-title-label"),
+  unlockValueLabel: queryRequired<HTMLElement>("#unlock-value-label"),
+  tickerCurrentLabel: queryRequired<HTMLElement>("#ticker-current-label"),
+  tickerNextLabel: queryRequired<HTMLElement>("#ticker-next-label"),
   stateLabel: queryRequired<HTMLElement>("#state-label"),
   fpsLabel: queryRequired<HTMLElement>("#fps-label"),
   sizeLabel: queryRequired<HTMLElement>("#size-label"),

@@ -16,22 +16,44 @@
 
       <div id="game-ui" class="game-ui">
         <header class="hud-strip" aria-label="游戏状态">
-          <div class="brand-lockup" aria-label="NEON SERPENT">
-            <span class="brand-mark"></span>
-            <span class="brand-title">NEON SERPENT</span>
-            <span class="brand-subtitle">霓虹吞星</span>
+          <div class="hud-topline">
+            <div class="brand-lockup" aria-label="NEON SERPENT">
+              <span class="brand-mark"></span>
+              <span class="brand-copy">
+                <span class="brand-title">NEON SERPENT</span>
+                <span class="brand-subtitle">霓虹吞星</span>
+              </span>
+            </div>
+
+            <button id="pause-button" class="icon-button icon-button--quiet" type="button" aria-label="暂停游戏">
+              ❚❚
+            </button>
           </div>
 
-          <div class="status-cluster">
-            <span class="stat-chip"><span>Score</span><strong id="score-label">0</strong></span>
-            <span class="stat-chip">
-              <span>Length</span>
-              <strong id="length-label">4</strong>
+          <div class="hud-cards" aria-label="当前信息">
+            <section class="hud-card hud-card--length" aria-label="当前长度">
+              <span class="hud-card__label">当前长度</span>
+              <strong id="length-label" class="hud-card__value">4</strong>
+            </section>
+
+            <section class="hud-card hud-card--unlock" aria-label="下一个解锁">
+              <strong id="unlock-title-label" class="hud-card__value">长度7解锁</strong>
+              <span id="unlock-value-label" class="hud-card__subvalue">黑洞</span>
+            </section>
+          </div>
+
+          <div class="hud-ticker" aria-label="操作提示" aria-live="polite" aria-atomic="true">
+            <span id="ticker-current-label" class="hud-ticker__line hud-ticker__line--current">
+              长按Shift减速，长按方向键加速
             </span>
-            <span class="stat-chip"><span>Best</span><strong id="best-label">0</strong></span>
+            <span
+              id="ticker-next-label"
+              class="hud-ticker__line hud-ticker__line--next"
+              aria-hidden="true"
+            >
+              注意，黑洞会把你吸入深渊
+            </span>
           </div>
-
-          <button id="pause-button" class="icon-button" type="button" aria-label="暂停">P</button>
         </header>
 
         <section id="start-panel" class="start-panel" aria-label="开始界面">
@@ -40,10 +62,10 @@
           <h1>NEON SERPENT</h1>
           <p class="panel-subtitle">霓虹吞星</p>
           <section class="operation-guide" aria-label="基础操作体验">
-            <div class="operation-note">加速：长按对应方向键</div>
-            <div class="operation-note">减速：按住Shift</div>
+            <div class="operation-note">加速：长按方向键</div>
+            <div class="operation-note">减速：长按 Shift</div>
           </section>
-          <button id="start-button" class="primary-action" type="button">启动游戏</button>
+          <button id="start-button" class="primary-action" type="button">开始游戏</button>
         </section>
 
         <div id="touch-controls" class="touch-controls" aria-label="移动端控制">
@@ -53,7 +75,9 @@
             <span id="joystick-knob" class="joystick-knob" aria-hidden="true"></span>
           </div>
 
-          <button id="boost-button" class="boost-button" type="button" aria-label="冲刺">BOOST</button>
+          <button id="boost-button" class="boost-button" type="button" aria-label="冲刺">
+            BOOST
+          </button>
         </div>
 
         <aside class="diagnostic-strip" aria-label="运行状态">
@@ -64,7 +88,7 @@
 
         <div class="orientation-mask" role="status">
           <strong>建议横屏游玩</strong>
-          <span>旋转设备后可以获得更完整的操控空间</span>
+          <span>旋转设备后可获得更完整的操作空间。</span>
         </div>
       </div>
     </main>
