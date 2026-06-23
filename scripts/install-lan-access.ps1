@@ -26,7 +26,7 @@ if ($DnsServers.Count -gt 0) {
   Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses $DnsServers
 }
 
-$ruleName = "Neon Serpent Vite 5174"
+$ruleName = "Neon Serpent Vite 5173"
 if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
   Write-Host "Adding firewall rule..."
   New-NetFirewallRule `
@@ -34,7 +34,7 @@ if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContin
     -Direction Inbound `
     -Action Allow `
     -Protocol TCP `
-    -LocalPort 5174 `
+    -LocalPort 5173 `
     -Profile Domain,Private,Public | Out-Null
 }
 

@@ -1900,13 +1900,6 @@ function drawBlackHole(context: CanvasRenderingContext2D, snapshot: GameSnapshot
   context.lineCap = "round";
   context.lineJoin = "round";
 
-  const edgeRingRadius = grid.cellSize * Math.max(coreRadiusCells + 0.58, influenceRadiusCells * 0.82);
-  context.strokeStyle = active ? "rgba(143, 251, 255, 0.12)" : "rgba(193, 145, 255, 0.1)";
-  context.lineWidth = Math.max(0.9, grid.cellSize * 0.026);
-  context.beginPath();
-  context.arc(0, 0, edgeRingRadius, -Math.PI * 0.18, Math.PI * 1.18);
-  context.stroke();
-
   for (let index = 0; index < swirlCount; index += 1) {
     const layer = swirlCount === 1 ? 0 : index / (swirlCount - 1);
     const arcRadius = swirlBaseRadius + index * grid.cellSize * BLACK_HOLE_VISUAL.swirlRadiusStep;

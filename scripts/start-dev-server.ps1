@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$port = 5174
+$port = 5173
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $logDir = Join-Path $repoRoot ".codex\lan-access"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -26,30 +26,37 @@ function Test-PortOpen {
   }
 }
 
-$nodeCandidates = @(
-  Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
-  "C:\Users\happyelements\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
-  "node"
-)
-
-$nodeExe = $nodeCandidates | Where-Object {
-  $_ -eq "node" -or (Test-Path $_)
-} | Select-Object -First 1
-
-if (-not $nodeExe) {
-  throw "Node executable not found."
-}
-
-$viteEntry = Join-Path $repoRoot "node_modules\vite\bin\vite.js"
-if (-not (Test-Path $viteEntry)) {
-  throw "Vite entry not found: $viteEntry"
-}
-
 $stdoutLog = Join-Path $logDir "dev-server.out.log"
 $stderrLog = Join-Path $logDir "dev-server.err.log"
 
+function Get-NodeExe {
+  $nodeCandidates = @(
+    (Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"),
+    "C:\Users\happyelements\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe",
+    "node"
+  )
+
+  return $nodeCandidates | Where-Object {
+    $_ -eq "node" -or (Test-Path $_)
+  } | Select-Object -First 1
+}
+
+function Get-ViteEntry {
+  return Join-Path $repoRoot "node_modules\vite\bin\vite.js"
+}
+
 function Start-ViteServer {
-  return Start-Process -FilePath $nodeExe `
+  $nodeExe = Get-NodeExe
+  if (-not $nodeExe) {
+    throw "Node executable not found."
+  }
+
+  $viteEntry = Get-ViteEntry
+  if (-not (Test-Path $viteEntry)) {
+    throw "Vite entry not found: $viteEntry"
+  }
+
+  Start-Process -FilePath $nodeExe `
     -ArgumentList @(
       $viteEntry,
       "--host",
@@ -66,27 +73,38 @@ function Start-ViteServer {
 }
 
 while ($true) {
-  if (Test-PortOpen -Port $port) {
-    Start-Sleep -Seconds 5
-    continue
-  }
-
-  $process = Start-ViteServer
-  $deadline = [DateTime]::UtcNow.AddSeconds(10)
-
-  while ([DateTime]::UtcNow -lt $deadline) {
+  try {
     if (Test-PortOpen -Port $port) {
-      break
+      Start-Sleep -Seconds 5
+      continue
     }
 
-    if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
-      break
+    $process = Start-ViteServer
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+
+    while ([DateTime]::UtcNow -lt $deadline) {
+      if (Test-PortOpen -Port $port) {
+        break
+      }
+
+      if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
+        break
+      }
+
+      Start-Sleep -Milliseconds 250
     }
 
-    Start-Sleep -Milliseconds 250
-  }
+    if (-not (Test-PortOpen -Port $port)) {
+      Start-Sleep -Seconds 3
+    }
+  } catch {
+    $stamp = Get-Date -Format o
+    try {
+      Add-Content -LiteralPath $stderrLog -Value "$stamp $($_.Exception.Message)"
+    } catch {
+      # Keep trying even if logging fails.
+    }
 
-  if (-not (Test-PortOpen -Port $port)) {
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 5
   }
 }
