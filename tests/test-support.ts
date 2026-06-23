@@ -231,6 +231,11 @@ export function createGameUi(): GameUiElements {
   const root = new FakeElement({ left: 0, top: 0, width: 960, height: 540 });
   const hudStrip = new FakeElement({ left: 0, top: 16, width: 760, height: 183 });
   const startPanel = new FakeElement({ left: 0, top: 0, width: 320, height: 220 });
+  const panelPrimaryLabel = new FakeElement();
+  const panelPrimaryValue = new FakeElement();
+  const panelSecondaryLabel = new FakeElement();
+  const panelMetaLabel = new FakeElement();
+  const lifeHearts = [new FakeElement(), new FakeElement(), new FakeElement()];
   const lengthLabel = new FakeElement();
   const unlockTitleLabel = new FakeElement();
   const unlockValueLabel = new FakeElement();
@@ -251,6 +256,11 @@ export function createGameUi(): GameUiElements {
     root: root as unknown as HTMLElement,
     hudStrip: hudStrip as unknown as HTMLElement,
     startPanel: startPanel as unknown as HTMLElement,
+    panelPrimaryLabel: panelPrimaryLabel as unknown as HTMLElement,
+    panelPrimaryValue: panelPrimaryValue as unknown as HTMLElement,
+    panelSecondaryLabel: panelSecondaryLabel as unknown as HTMLElement,
+    panelMetaLabel: panelMetaLabel as unknown as HTMLElement,
+    lifeHearts: lifeHearts as unknown as readonly HTMLElement[],
     lengthLabel: lengthLabel as unknown as HTMLElement,
     unlockTitleLabel: unlockTitleLabel as unknown as HTMLElement,
     unlockValueLabel: unlockValueLabel as unknown as HTMLElement,

@@ -1,4 +1,4 @@
-import { isBlackHoleCollision, getBlackHoleSpawnExclusionRadiusCells } from "./blackHole";
+import { getBlackHoleBandForCell, getBlackHoleSpawnExclusionRadiusCells, isBlackHoleCollision } from "./blackHole";
 import { findSafeSpawnPosition } from "./spawn";
 import type { GameProgress } from "./progression";
 import type {
@@ -36,8 +36,10 @@ export interface StarBeastSpawnContext {
 export interface StarBeastMoveContext {
   grid: GridMetrics;
   playerHead: GridCell | null;
+  playerDirection: Direction;
   playerBody: readonly GridCell[];
   blockedCells: readonly GridCell[];
+  starCoreCells: readonly GridCell[];
   otherStarBeasts: readonly StarBeast[];
   blackHoles: readonly BlackHole[];
   currentTime: number;
@@ -61,45 +63,49 @@ export const STAR_BEAST_CONFIG = {
   maxAlive: 2,
   maxLength: 24,
   maxDroppedCoresOnMap: 96,
-  spawnCheckIntervalMs: 5000,
+  spawnCheckIntervalMs: 3333,
   spawnGraceTimeMs: 1200,
-  respawnCooldownMs: 18000,
+  respawnCooldownMs: 12000,
   deathFlashMs: 120,
+  coreHuntCooldownRangeMs: [15000, 25000],
+  coreHuntWindowRangeMs: [2500, 4200],
+  attackCooldownRangeMs: [15000, 30000],
+  attackWindowRangeMs: [2500, 3600],
   tiers: [
     {
       minPlayerLength: 10,
       maxPlayerLength: 24,
-      length: 8,
-      speedFactor: 0.68,
-      aggroRadius: 7,
-      loseAggroRadius: 11,
+      length: 12,
+      speedFactor: 0.76,
+      aggroRadius: 9,
+      loseAggroRadius: 14,
       maxAlive: 1,
     },
     {
       minPlayerLength: 25,
       maxPlayerLength: 49,
       length: 12,
-      speedFactor: 0.76,
-      aggroRadius: 8,
-      loseAggroRadius: 12,
+      speedFactor: 0.82,
+      aggroRadius: 10,
+      loseAggroRadius: 15,
       maxAlive: 1,
     },
     {
       minPlayerLength: 50,
       maxPlayerLength: 79,
-      length: 16,
-      speedFactor: 0.84,
-      aggroRadius: 9,
-      loseAggroRadius: 13,
+      length: 12,
+      speedFactor: 0.88,
+      aggroRadius: 11,
+      loseAggroRadius: 16,
       maxAlive: 2,
     },
     {
       minPlayerLength: 80,
       maxPlayerLength: 9999,
-      length: 24,
-      speedFactor: 0.92,
-      aggroRadius: 10,
-      loseAggroRadius: 15,
+      length: 12,
+      speedFactor: 0.94,
+      aggroRadius: 12,
+      loseAggroRadius: 18,
       maxAlive: 2,
     },
   ],
@@ -112,6 +118,10 @@ export const STAR_BEAST_CONFIG = {
   spawnGraceTimeMs: number;
   respawnCooldownMs: number;
   deathFlashMs: number;
+  coreHuntCooldownRangeMs: readonly [number, number];
+  coreHuntWindowRangeMs: readonly [number, number];
+  attackCooldownRangeMs: readonly [number, number];
+  attackWindowRangeMs: readonly [number, number];
   tiers: readonly StarBeastTier[];
 };
 
@@ -125,6 +135,10 @@ function cellKey(cell: GridCell): string {
 
 function cellsMatch(left: GridCell, right: GridCell): boolean {
   return left.column === right.column && left.row === right.row;
+}
+
+function manhattanDistance(left: GridCell, right: GridCell): number {
+  return Math.abs(left.column - right.column) + Math.abs(left.row - right.row);
 }
 
 function isInsideGrid(cell: GridCell, grid: GridMetrics): boolean {
@@ -204,11 +218,41 @@ function shuffleDirections(random: () => number): Direction[] {
   return directions;
 }
 
+function rollRange(random: () => number, min: number, max: number): number {
+  return min + random() * (max - min);
+}
+
+function getReverseDirection(direction: Direction): Direction {
+  switch (direction) {
+    case "up":
+      return "down";
+    case "right":
+      return "left";
+    case "down":
+      return "up";
+    case "left":
+      return "right";
+  }
+}
+
 function getBlackHoleDangerZones(blackHoles: readonly BlackHole[]): Array<{ center: GridCell; radius: number }> {
   return blackHoles.map((blackHole) => ({
     center: blackHole.cell,
     radius: getBlackHoleSpawnExclusionRadiusCells(blackHole) + 1,
   }));
+}
+
+function getBlackHoleBandScore(band: NonNullable<ReturnType<typeof getBlackHoleBandForCell>>): number {
+  switch (band) {
+    case "core":
+      return 9;
+    case "strong":
+      return 8;
+    case "medium":
+      return 7;
+    case "weak":
+      return 6;
+  }
 }
 
 function isInDangerZone(cell: GridCell, center: GridCell, radius: number): boolean {
@@ -327,6 +371,11 @@ export function spawnStarBeast(context: StarBeastSpawnContext, config: typeof ST
           aiDecisionCooldown: 0,
           turnCommitTicks: 2,
           spawnGraceTime: config.spawnGraceTimeMs,
+          coreScanStepCount: 0,
+          nextCoreHuntAt: context.currentTime + rollRange(random, config.coreHuntCooldownRangeMs[0], config.coreHuntCooldownRangeMs[1]) / 1000,
+          coreHuntUntil: context.currentTime,
+          nextAttackAt: context.currentTime + rollRange(random, config.attackCooldownRangeMs[0], config.attackCooldownRangeMs[1]) / 1000,
+          attackUntil: context.currentTime,
           speedFactor: tier.speedFactor,
           aggroRadius: tier.aggroRadius,
           loseAggroRadius: tier.loseAggroRadius,
@@ -340,34 +389,82 @@ export function spawnStarBeast(context: StarBeastSpawnContext, config: typeof ST
   return null;
 }
 
+function getManhattanApproachScore(
+  from: GridCell,
+  nextCell: GridCell,
+  target: GridCell,
+  closerBonus: number,
+  fartherPenalty: number,
+  hitBonus: number,
+): number {
+  const currentDistance = manhattanDistance(from, target);
+  const nextDistance = manhattanDistance(nextCell, target);
+  let score = 0;
+
+  if (nextDistance < currentDistance) {
+    score += closerBonus * (currentDistance - nextDistance);
+  } else if (nextDistance > currentDistance) {
+    score += fartherPenalty * (nextDistance - currentDistance);
+  }
+
+  if (nextDistance === 0) {
+    score += hitBonus;
+  }
+
+  return score;
+}
+
+function findNearestCell(from: GridCell, cells: readonly GridCell[]): GridCell | null {
+  let bestCell: GridCell | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (const cell of cells) {
+    const distance = manhattanDistance(from, cell);
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestCell = cell;
+    }
+  }
+
+  return bestCell;
+}
+
 function getPlayerDistanceScore(
   from: GridCell,
   playerHead: GridCell,
   playerBody: readonly GridCell[],
+  playerDirection: Direction,
   currentDirection: Direction,
   candidateDirection: Direction,
   state: StarBeast["state"],
+  isAttacking: boolean,
 ): number {
-  const currentDistance = Math.abs(from.column - playerHead.column) + Math.abs(from.row - playerHead.row);
   const nextCell = getNextCell(from, candidateDirection);
-  const nextDistance = Math.abs(nextCell.column - playerHead.column) + Math.abs(nextCell.row - playerHead.row);
-  const closerBonus = state === "chase" ? 16 : 5;
-  const fartherPenalty = state === "chase" ? -10 : 4;
+  const target = isAttacking ? getNextCell(playerHead, playerDirection) : playerHead;
+  const closerBonus = isAttacking
+    ? state === "chase"
+      ? 20
+      : 9
+    : state === "chase"
+      ? 18
+      : 5;
+  const fartherPenalty = isAttacking
+    ? state === "chase"
+      ? -5
+      : -1
+    : state === "chase"
+      ? -10
+      : -1;
   const bodyPenalty = state === "chase" ? -18 : -120;
-  let score = 0;
-
-  if (nextDistance < currentDistance) {
-    score += closerBonus;
-  } else if (nextDistance > currentDistance) {
-    score += fartherPenalty;
-  }
+  let score = getManhattanApproachScore(from, nextCell, target, closerBonus, fartherPenalty, isAttacking ? 16 : state === "chase" ? 5 : -1);
 
   if (candidateDirection === currentDirection) {
-    score += 8;
-  } else if (candidateDirection === turnLeft(currentDirection)) {
     score += 4;
-  } else if (candidateDirection === turnRight(currentDirection)) {
-    score += 2;
+  } else if (candidateDirection === turnLeft(currentDirection) || candidateDirection === turnRight(currentDirection)) {
+    score += 5;
+  } else if (candidateDirection === getReverseDirection(currentDirection)) {
+    score += isAttacking ? 1 : -1;
   }
 
   for (const bodyCell of playerBody) {
@@ -381,28 +478,75 @@ function getPlayerDistanceScore(
     }
   }
 
-  if (cellsMatch(nextCell, playerHead)) {
+  if (isAttacking && cellsMatch(nextCell, playerHead)) {
+    score -= 20;
+  } else if (cellsMatch(nextCell, playerHead)) {
     score += state === "chase" ? 5 : -1;
   }
 
   return score;
 }
 
-function getDangerPenalty(nextCell: GridCell, blackHoles: readonly BlackHole[], currentTime: number, state: StarBeast["state"]): number {
-  let penalty = 0;
+function getStarCoreAttractionScore(
+  from: GridCell,
+  nextCell: GridCell,
+  starCoreCells: readonly GridCell[],
+  state: StarBeast["state"],
+  isHungry: boolean,
+): number {
+  if (starCoreCells.length === 0) {
+    return 0;
+  }
+
+  const target = findNearestCell(from, starCoreCells);
+
+  if (!target) {
+    return 0;
+  }
+
+  const closerBonus = isHungry ? (state === "chase" ? 10 : 14) : (state === "chase" ? 5 : 8);
+  const fartherPenalty = isHungry ? (state === "chase" ? -4 : -6) : (state === "chase" ? -1 : -2);
+  const hitBonus = isHungry ? 22 : 10;
+
+  return getManhattanApproachScore(from, nextCell, target, closerBonus, fartherPenalty, hitBonus);
+}
+
+function getBlackHoleAttractionScore(
+  from: GridCell,
+  nextCell: GridCell,
+  blackHoles: readonly BlackHole[],
+  currentTime: number,
+  state: StarBeast["state"],
+): number {
+  let score = 0;
 
   for (const blackHole of blackHoles) {
-    if (isBlackHoleCollision(nextCell, blackHole, currentTime)) {
-      penalty += state === "chase" ? -16 : -120;
+    if (currentTime < blackHole.activateAt) {
       continue;
     }
 
-    if (isNear(nextCell, blackHole.cell, 1)) {
-      penalty += state === "chase" ? -5 : -18;
+    const currentBand = getBlackHoleBandForCell(from, blackHole, currentTime);
+    const nextBand = getBlackHoleBandForCell(nextCell, blackHole, currentTime);
+
+    if (!nextBand && !currentBand) {
+      continue;
+    }
+
+    const currentBandScore = currentBand ? getBlackHoleBandScore(currentBand) : 0;
+    const nextBandScore = nextBand ? getBlackHoleBandScore(nextBand) : 0;
+    const pullBonus = state === "chase" ? 4.5 : 6;
+    const slipPenalty = state === "chase" ? -2.5 : -5.5;
+
+    score += (nextBandScore - currentBandScore) * pullBonus;
+
+    if (nextBandScore > 0) {
+      score += nextBandScore * (state === "chase" ? 1.2 : 2);
+    } else if (currentBandScore > 0) {
+      score += slipPenalty;
     }
   }
 
-  return penalty;
+  return score;
 }
 
 function getHardBlockPenalty(
@@ -443,7 +587,9 @@ export function chooseStarBeastDirection(
     return beast.dir;
   }
 
-  const candidates = [beast.dir, turnLeft(beast.dir), turnRight(beast.dir)];
+  const candidates = [beast.dir, turnLeft(beast.dir), turnRight(beast.dir), getReverseDirection(beast.dir)];
+  const attackActive = context.currentTime < beast.attackUntil;
+  const huntActive = context.currentTime < beast.coreHuntUntil;
   let bestDirection = beast.dir;
   let bestScore = -Infinity;
 
@@ -452,8 +598,18 @@ export function chooseStarBeastDirection(
     let score = 0;
 
     score += getHardBlockPenalty(nextCell, context.grid, beast.body, context.blockedCells, context.otherStarBeasts);
-    score += getPlayerDistanceScore(head, context.playerHead, context.playerBody, beast.dir, direction, beast.state);
-    score += getDangerPenalty(nextCell, context.blackHoles, context.currentTime, beast.state);
+    score += getPlayerDistanceScore(
+      head,
+      context.playerHead,
+      context.playerBody,
+      context.playerDirection,
+      beast.dir,
+      direction,
+      beast.state,
+      attackActive,
+    );
+    score += getStarCoreAttractionScore(head, nextCell, context.starCoreCells, beast.state, huntActive);
+    score += getBlackHoleAttractionScore(head, nextCell, context.blackHoles, context.currentTime, beast.state);
 
     if (score > bestScore) {
       bestScore = score;
@@ -498,7 +654,7 @@ export function buildStarBeastDropCores(
       magnetRadius: cause === "player_body" ? 3.5 : 3,
       lifetimeMs: 15000,
       value: 1,
-      source: "star_beast",
+      source: "regular",
       burstOrigin,
     });
   }

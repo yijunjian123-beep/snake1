@@ -1,4 +1,4 @@
-import type { GridCell, GridMetrics } from "./types";
+import type { Direction, GridCell, GridMetrics } from "./types";
 import type { SafeSpawnConfig, SafeSpawnZone } from "./progression";
 
 interface SpawnCandidateRule {
@@ -7,7 +7,23 @@ interface SpawnCandidateRule {
   ignoreDangerZones: boolean;
 }
 
+export interface ReviveSpawnPlacement {
+  cells: GridCell[];
+  direction: Direction;
+}
+
+export interface ReviveSpawnConfig {
+  occupiedCells?: readonly GridCell[];
+  blockedCells?: readonly GridCell[];
+  dangerZones?: readonly SafeSpawnZone[];
+  wallPadding?: number;
+  length: number;
+  random?: () => number;
+}
+
 const DEFAULT_RANDOM = (): number => Math.random();
+const REVIVE_DIRECTIONS: readonly Direction[] = ["up", "right", "down", "left"];
+const REVIVE_FORWARD_CLEAR_DISTANCE = 12;
 
 export function findSafeSpawnPosition(grid: GridMetrics, config: SafeSpawnConfig = {}): GridCell | null {
   const occupied = new Set<string>();
@@ -59,6 +75,120 @@ export function findStage0SafeSpawnPosition(grid: GridMetrics, config: SafeSpawn
     ignoreWallPadding: false,
     ignoreDangerZones: false,
   }, maxAttempts, random);
+}
+
+export function findReviveSpawnPlacement(
+  grid: GridMetrics,
+  config: ReviveSpawnConfig,
+): ReviveSpawnPlacement | null {
+  const length = Math.max(1, Math.floor(config.length));
+  const wallPadding = Math.max(0, Math.floor(config.wallPadding ?? 1));
+  const blocked = new Set<string>();
+  const dangerZones = config.dangerZones ?? [];
+  const random = config.random ?? DEFAULT_RANDOM;
+  const centerColumn = (grid.columns - 1) / 2;
+  const centerRow = (grid.rows - 1) / 2;
+
+  for (const cell of [...(config.occupiedCells ?? []), ...(config.blockedCells ?? [])]) {
+    blocked.add(cellKey(cell));
+  }
+
+  const headCandidates: Array<{ cell: GridCell; radius: number; score: number }> = [];
+
+  for (let row = 0; row < grid.rows; row += 1) {
+    for (let column = 0; column < grid.columns; column += 1) {
+      const cell = { column, row };
+
+      if (!isPlacementCellSafe(cell, grid, blocked, dangerZones, wallPadding)) {
+        continue;
+      }
+
+      headCandidates.push({
+        cell,
+        radius: Math.max(Math.abs(cell.column - centerColumn), Math.abs(cell.row - centerRow)),
+        score: scoreReviveHeadCandidate(cell, grid, blocked, dangerZones, wallPadding) + random() * 0.001,
+      });
+    }
+  }
+
+  if (headCandidates.length === 0) {
+    return null;
+  }
+
+  headCandidates.sort((left, right) => (
+    left.radius - right.radius ||
+    right.score - left.score ||
+    left.cell.row - right.cell.row ||
+    left.cell.column - right.cell.column
+  ));
+
+  for (const headCandidate of headCandidates) {
+    const head = headCandidate.cell;
+    const directionCandidates = REVIVE_DIRECTIONS
+      .map((direction) => {
+        const forwardCells = getReviveForwardCells(
+          head,
+          direction,
+          grid,
+          blocked,
+          dangerZones,
+          wallPadding,
+        );
+
+        if (!forwardCells) {
+          return null;
+        }
+
+        const front = forwardCells[0] ?? stepCell(head, direction);
+        const score = scoreReviveDirection(direction, head, grid, blocked, dangerZones, wallPadding);
+
+        return {
+          direction,
+          front,
+          forwardCells,
+          score: score + random() * 0.001,
+        };
+      })
+      .filter((candidate): candidate is {
+        direction: Direction;
+        front: GridCell;
+        forwardCells: GridCell[];
+        score: number;
+      } => candidate !== null && Number.isFinite(candidate.score))
+      .sort((left, right) => (
+        right.score - left.score ||
+        left.front.row - right.front.row ||
+        left.front.column - right.front.column
+      ));
+
+    for (const directionCandidate of directionCandidates) {
+      const { direction, front, forwardCells } = directionCandidate;
+
+      const visited = new Set<string>(blocked);
+      visited.add(cellKey(head));
+      for (const forwardCell of forwardCells) {
+        visited.add(cellKey(forwardCell));
+      }
+
+      const body: GridCell[] = [];
+
+      if (buildReviveBodyPath(
+        grid,
+        head,
+        body,
+        visited,
+        length - 1,
+        dangerZones,
+        wallPadding,
+        front,
+        random,
+      )) {
+        return { cells: [head, ...body], direction };
+      }
+    }
+  }
+
+  return null;
 }
 
 function pickCandidate(
@@ -113,6 +243,241 @@ function isNear(cell: GridCell, center: GridCell, radius: number): boolean {
 
 function isInDangerZone(cell: GridCell, zone: SafeSpawnZone): boolean {
   return isNear(cell, zone.center, Math.max(0, Math.floor(zone.radius)));
+}
+
+function buildReviveBodyPath(
+  grid: GridMetrics,
+  current: GridCell,
+  path: GridCell[],
+  visited: Set<string>,
+  remainingSegments: number,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+  frontCell: GridCell,
+  random: () => number,
+): boolean {
+  if (remainingSegments <= 0) {
+    return true;
+  }
+
+  const candidates = REVIVE_DIRECTIONS
+    .map((direction) => {
+      const cell = stepCell(current, direction);
+
+      if (!isPlacementCellSafe(cell, grid, visited, dangerZones, wallPadding)) {
+        return null;
+      }
+
+      return {
+        direction,
+        cell,
+        score: scoreRevivePathCell(cell, grid, visited, dangerZones, wallPadding, frontCell) + random() * 0.001,
+      };
+    })
+    .filter((candidate): candidate is { direction: Direction; cell: GridCell; score: number } => candidate !== null)
+    .sort((left, right) => (
+      right.score - left.score ||
+      left.cell.row - right.cell.row ||
+      left.cell.column - right.cell.column
+    ));
+
+  for (const candidate of candidates) {
+    path.push(candidate.cell);
+    visited.add(cellKey(candidate.cell));
+
+    if (buildReviveBodyPath(
+      grid,
+      candidate.cell,
+      path,
+      visited,
+      remainingSegments - 1,
+      dangerZones,
+      wallPadding,
+      frontCell,
+      random,
+    )) {
+      return true;
+    }
+
+    path.pop();
+    visited.delete(cellKey(candidate.cell));
+  }
+
+  return false;
+}
+
+function isPlacementCellSafe(
+  cell: GridCell,
+  grid: GridMetrics,
+  blocked: Set<string>,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+): boolean {
+  if (!isInsideGrid(cell, grid)) {
+    return false;
+  }
+
+  if (blocked.has(cellKey(cell))) {
+    return false;
+  }
+
+  if (isWallDanger(cell, grid, wallPadding)) {
+    return false;
+  }
+
+  return !dangerZones.some((zone) => isInDangerZone(cell, zone));
+}
+
+function scoreReviveHeadCandidate(
+  cell: GridCell,
+  grid: GridMetrics,
+  blocked: Set<string>,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+): number {
+  const centerColumn = (grid.columns - 1) / 2;
+  const centerRow = (grid.rows - 1) / 2;
+  const centerDistance = Math.hypot(cell.column - centerColumn, cell.row - centerRow);
+  const wallDistance = Math.min(cell.column, cell.row, grid.columns - 1 - cell.column, grid.rows - 1 - cell.row);
+  const openNeighbors = getOpenNeighborCount(cell, grid, blocked, dangerZones, wallPadding);
+  const dangerDistance = dangerZones.length > 0
+    ? dangerZones.reduce((closest, zone) => {
+      const distance = Math.max(Math.abs(cell.column - zone.center.column), Math.abs(cell.row - zone.center.row)) - Math.max(0, Math.floor(zone.radius));
+      return Math.min(closest, distance);
+    }, Number.POSITIVE_INFINITY)
+    : 0;
+
+  return wallDistance * 6 + openNeighbors * 4 + Math.max(0, dangerDistance) * 8 - centerDistance;
+}
+
+function scoreReviveDirection(
+  direction: Direction,
+  head: GridCell,
+  grid: GridMetrics,
+  blocked: Set<string>,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+): number {
+  const front = stepCell(head, direction);
+
+  if (!isPlacementCellSafe(front, grid, blocked, dangerZones, wallPadding)) {
+    return Number.NEGATIVE_INFINITY;
+  }
+
+  const scoutBlocked = new Set<string>(blocked);
+  scoutBlocked.add(cellKey(head));
+
+  const wallDistance = Math.min(
+    front.column,
+    front.row,
+    grid.columns - 1 - front.column,
+    grid.rows - 1 - front.row,
+  );
+  const openNeighbors = getOpenNeighborCount(front, grid, scoutBlocked, dangerZones, wallPadding);
+  const centerColumn = (grid.columns - 1) / 2;
+  const centerRow = (grid.rows - 1) / 2;
+  const centerDistance = Math.hypot(front.column - centerColumn, front.row - centerRow);
+
+  let score = wallDistance * 5 + openNeighbors * 6 - centerDistance;
+
+  const headWallDistance = Math.min(
+    head.column,
+    head.row,
+    grid.columns - 1 - head.column,
+    grid.rows - 1 - head.row,
+  );
+
+  score += headWallDistance * 0.5;
+
+  return score;
+}
+
+function getReviveForwardCells(
+  head: GridCell,
+  direction: Direction,
+  grid: GridMetrics,
+  blocked: Set<string>,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+): GridCell[] | null {
+  const cells: GridCell[] = [];
+  let current = head;
+
+  for (let step = 0; step < REVIVE_FORWARD_CLEAR_DISTANCE; step += 1) {
+    current = stepCell(current, direction);
+
+    if (!isPlacementCellSafe(current, grid, blocked, dangerZones, wallPadding)) {
+      return null;
+    }
+
+    cells.push(current);
+  }
+
+  return cells;
+}
+
+function scoreRevivePathCell(
+  cell: GridCell,
+  grid: GridMetrics,
+  visited: Set<string>,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+  frontCell: GridCell,
+): number {
+  const wallDistance = Math.min(cell.column, cell.row, grid.columns - 1 - cell.column, grid.rows - 1 - cell.row);
+  const openNeighbors = getOpenNeighborCount(cell, grid, visited, dangerZones, wallPadding);
+  const frontDistance = Math.abs(cell.column - frontCell.column) + Math.abs(cell.row - frontCell.row);
+  return wallDistance * 2 + openNeighbors * 5 + frontDistance;
+}
+
+function getOpenNeighborCount(
+  cell: GridCell,
+  grid: GridMetrics,
+  blocked: Set<string>,
+  dangerZones: readonly SafeSpawnZone[],
+  wallPadding: number,
+): number {
+  let count = 0;
+
+  for (const direction of REVIVE_DIRECTIONS) {
+    const next = stepCell(cell, direction);
+
+    if (!isPlacementCellSafe(next, grid, blocked, dangerZones, wallPadding)) {
+      continue;
+    }
+
+    count += 1;
+  }
+
+  return count;
+}
+
+function stepCell(cell: GridCell, direction: Direction): GridCell {
+  const delta = directionDelta(direction);
+
+  return {
+    column: cell.column + delta.column,
+    row: cell.row + delta.row,
+  };
+}
+
+function directionDelta(direction: Direction): GridCell {
+  switch (direction) {
+    case "up":
+      return { column: 0, row: -1 };
+    case "right":
+      return { column: 1, row: 0 };
+    case "down":
+      return { column: 0, row: 1 };
+    case "left":
+      return { column: -1, row: 0 };
+  }
+
+  throw new Error("Unreachable direction.");
+}
+
+function isInsideGrid(cell: GridCell, grid: GridMetrics): boolean {
+  return cell.row >= 0 && cell.column >= 0 && cell.row < grid.rows && cell.column < grid.columns;
 }
 
 function pickFrom(candidates: readonly GridCell[], random: () => number): GridCell | null {

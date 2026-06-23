@@ -3,6 +3,8 @@
   --bg: #03040a;
   --panel: rgba(11, 18, 38, 0.58);
   --panel-strong: rgba(7, 10, 22, 0.82);
+  --panel-sheen: rgba(255, 255, 255, 0.08);
+  --panel-grid: rgba(255, 255, 255, 0.05);
   --line: rgba(143, 251, 255, 0.28);
   --line-hot: rgba(255, 43, 214, 0.42);
   --glass-top: rgba(255, 255, 255, 0.14);
@@ -49,6 +51,7 @@ button {
   inset: 0;
   min-width: 320px;
   min-height: 320px;
+  --board-top: 240px;
   color: var(--text);
   background:
     radial-gradient(circle at 20% 10%, rgba(0, 245, 255, 0.14), transparent 28%),
@@ -57,6 +60,7 @@ button {
   overflow: hidden;
   overscroll-behavior: none;
   touch-action: none;
+  isolation: isolate;
 }
 
 .game-canvas {
@@ -83,16 +87,19 @@ button {
   padding: 12px 12px 12px;
   border: 1px solid rgba(143, 251, 255, 0.22);
   border-radius: 8px;
+  overflow: hidden;
   background:
     linear-gradient(180deg, var(--glass-top), var(--glass-bottom)),
-    linear-gradient(135deg, rgba(14, 25, 55, 0.78), rgba(9, 10, 24, 0.54));
+    linear-gradient(135deg, rgba(14, 25, 55, 0.8), rgba(9, 10, 24, 0.56)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 56px),
+    repeating-linear-gradient(0deg, rgba(0, 245, 255, 0.04) 0 1px, transparent 1px 18px);
   box-shadow:
     0 0 38px rgba(0, 245, 255, 0.14),
     0 12px 34px rgba(0, 0, 0, 0.28),
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
     inset 0 0 24px rgba(255, 43, 214, 0.08);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px) saturate(1.25);
+  -webkit-backdrop-filter: blur(14px) saturate(1.25);
   transform: translateX(-50%);
 }
 
@@ -104,7 +111,20 @@ button {
     linear-gradient(90deg, transparent, rgba(0, 245, 255, 0.28), transparent),
     linear-gradient(180deg, rgba(255, 255, 255, 0.12), transparent 34%);
   content: "";
-  opacity: 0.52;
+  opacity: 0.46;
+  pointer-events: none;
+}
+
+.hud-strip::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.16), transparent 26%),
+    linear-gradient(135deg, transparent 0 38%, rgba(0, 245, 255, 0.09) 46%, transparent 58%),
+    linear-gradient(315deg, transparent 0 72%, rgba(255, 43, 214, 0.08) 84%, transparent 94%);
+  content: "";
+  opacity: 0.55;
   pointer-events: none;
 }
 
@@ -122,6 +142,57 @@ button {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.hud-lives {
+  position: absolute;
+  top: calc(var(--board-top, 240px) - 20px);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: max-content;
+  padding: 6px 14px;
+  border: 1px solid rgba(143, 251, 255, 0.18);
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(7, 10, 22, 0.42);
+  box-shadow:
+    0 0 22px rgba(0, 245, 255, 0.08),
+    0 10px 24px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(10px) saturate(1.18);
+  -webkit-backdrop-filter: blur(10px) saturate(1.18);
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.hud-life {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  color: rgba(255, 255, 255, 0.26);
+  font-size: 1.02rem;
+  line-height: 1;
+  font-weight: 900;
+  text-shadow: 0 0 12px rgba(255, 43, 214, 0.1);
+  transition:
+    color 180ms ease,
+    opacity 180ms ease,
+    transform 180ms ease,
+    text-shadow 180ms ease;
+}
+
+.hud-life[data-active="true"] {
+  color: #ff4b9d;
+  text-shadow:
+    0 0 10px rgba(255, 43, 214, 0.7),
+    0 0 18px rgba(0, 245, 255, 0.22);
+  transform: translateY(-1px) scale(1.04);
 }
 
 .brand-lockup {
@@ -185,19 +256,23 @@ button {
   padding: 10px 12px 9px;
   border: 1px solid rgba(143, 251, 255, 0.2);
   border-radius: 8px;
+  overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.02)),
-    rgba(0, 0, 0, 0.18);
+    linear-gradient(135deg, rgba(13, 22, 44, 0.78), rgba(0, 0, 0, 0.18)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 44px);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 0 16px rgba(0, 245, 255, 0.06);
+    inset 0 0 16px rgba(0, 245, 255, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 
 .hud-card--unlock {
   border-color: rgba(255, 43, 214, 0.26);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 0 18px rgba(255, 43, 214, 0.09);
+    inset 0 0 18px rgba(255, 43, 214, 0.09),
+    inset 0 0 0 1px rgba(255, 43, 214, 0.04);
 }
 
 .hud-card__label,
@@ -282,7 +357,9 @@ button {
   border: 1px solid rgba(143, 251, 255, 0.36);
   border-radius: 8px;
   color: var(--text);
-  background: rgba(0, 245, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
+    rgba(0, 245, 255, 0.1);
   cursor: pointer;
   touch-action: manipulation;
 }
@@ -301,11 +378,15 @@ button {
   box-shadow:
     0 0 16px rgba(0, 245, 255, 0.1),
     inset 0 0 16px rgba(0, 245, 255, 0.12);
+  backdrop-filter: blur(8px) saturate(1.2);
+  -webkit-backdrop-filter: blur(8px) saturate(1.2);
 }
 
 .icon-button--quiet {
   border-color: rgba(143, 251, 255, 0.22);
-  background: rgba(0, 245, 255, 0.07);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.015)),
+    rgba(0, 245, 255, 0.07);
 }
 
 .primary-action {
@@ -317,11 +398,19 @@ button {
   padding: 0 18px;
   color: #061015;
   font-weight: 800;
-  background: linear-gradient(135deg, var(--lime), var(--cyan));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.08)),
+    linear-gradient(135deg, var(--lime), var(--cyan));
   box-shadow:
     0 0 24px rgba(0, 245, 255, 0.36),
     0 0 42px rgba(219, 255, 82, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.42);
+}
+
+.primary-action:disabled {
+  opacity: 0.56;
+  cursor: default;
+  filter: saturate(0.85);
 }
 
 .primary-action::before {
@@ -353,17 +442,18 @@ button {
   top: 50%;
   left: 50%;
   width: min(440px, calc(100vw - 32px));
-  min-height: 260px;
+  min-height: 300px;
   display: grid;
   place-items: center;
   gap: 8px;
   overflow: hidden;
-  padding: 32px 24px;
+  padding: 30px 24px 26px;
   border: 1px solid rgba(255, 43, 214, 0.32);
   border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.03)),
-    linear-gradient(150deg, rgba(12, 24, 58, 0.74), rgba(10, 4, 24, 0.76));
+    linear-gradient(150deg, rgba(12, 24, 58, 0.74), rgba(10, 4, 24, 0.76)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 46px);
   box-shadow:
     0 0 64px rgba(255, 43, 214, 0.24),
     0 0 42px rgba(0, 245, 255, 0.14),
@@ -372,8 +462,8 @@ button {
     inset 0 0 34px rgba(0, 245, 255, 0.1);
   text-align: center;
   transform: translate(-50%, -46%);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
 }
 
 .start-panel[hidden] {
@@ -390,9 +480,10 @@ button {
 .start-panel::before {
   inset: 0;
   background:
-    linear-gradient(90deg, transparent, rgba(0, 245, 255, 0.2), transparent),
+    linear-gradient(90deg, transparent, rgba(0, 245, 255, 0.24), transparent),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent 24%, rgba(255, 43, 214, 0.04) 82%, transparent),
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.07) 0 1px, transparent 1px 42px);
-  opacity: 0.34;
+  opacity: 0.38;
 }
 
 .start-panel::after {
@@ -447,6 +538,17 @@ button {
   text-shadow: 0 0 14px rgba(219, 255, 82, 0.62);
 }
 
+.panel-primary-label {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: rgba(247, 251, 255, 0.76);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-shadow: 0 0 12px rgba(0, 245, 255, 0.28);
+}
+
 .start-panel h1 {
   position: relative;
   z-index: 1;
@@ -463,10 +565,21 @@ button {
 .panel-subtitle {
   position: relative;
   z-index: 1;
-  margin: 0 0 10px;
+  margin: 0;
   color: var(--muted);
   font-size: 1rem;
   text-shadow: 0 0 14px rgba(0, 245, 255, 0.24);
+}
+
+.panel-meta {
+  position: relative;
+  z-index: 1;
+  margin: 0 0 10px;
+  color: rgba(247, 251, 255, 0.8);
+  font-size: 0.9rem;
+  line-height: 1.22;
+  text-align: center;
+  text-shadow: 0 0 14px rgba(255, 43, 214, 0.14);
 }
 
 .operation-guide {
@@ -476,10 +589,14 @@ button {
   justify-self: stretch;
   margin: 0;
   padding-top: 6px;
-  display: grid;
+  display: none;
   gap: 4px;
   border-top: 1px solid rgba(143, 251, 255, 0.18);
   text-align: left;
+}
+
+.game-shell[data-phase="ready"] .operation-guide {
+  display: grid;
 }
 
 .operation-guide-title {
@@ -524,6 +641,59 @@ button {
   margin: 0;
 }
 
+.game-shell[data-phase="reviving"] .start-panel,
+.game-shell[data-phase="gameOver"] .start-panel {
+  border-color: rgba(0, 245, 255, 0.28);
+}
+
+.game-shell[data-phase="reviving"] .panel-kicker {
+  color: #dbff52;
+}
+
+.game-shell[data-phase="reviving"] .start-panel h1,
+.game-shell[data-phase="gameOver"] .start-panel h1 {
+  color: #f7fbff;
+}
+
+.game-shell[data-phase="reviving"] .start-panel h1 {
+  text-shadow:
+    0 0 18px rgba(0, 245, 255, 0.7),
+    0 0 34px rgba(219, 255, 82, 0.28),
+    0 0 58px rgba(0, 245, 255, 0.18);
+}
+
+.game-shell[data-phase="gameOver"] .panel-subtitle {
+  color: #9db1c9;
+}
+
+.game-shell[data-phase="reviving"] .panel-subtitle {
+  color: #dbff52;
+  text-shadow: 0 0 14px rgba(219, 255, 82, 0.18);
+}
+
+.game-shell[data-phase="reviving"] .panel-meta {
+  color: #f7fbff;
+  text-shadow: 0 0 14px rgba(0, 245, 255, 0.18);
+}
+
+.game-shell[data-phase="revivePrompt"] .start-panel {
+  min-height: 232px;
+  gap: 6px;
+  padding: 24px 24px 20px;
+}
+
+.game-shell[data-phase="revivePrompt"] .start-orbit,
+.game-shell[data-phase="revivePrompt"] .panel-kicker,
+.game-shell[data-phase="revivePrompt"] .panel-meta,
+.game-shell[data-phase="revivePrompt"] .operation-guide {
+  display: none;
+}
+
+.game-shell[data-phase="revivePrompt"] .panel-subtitle {
+  color: #f7fbff;
+  text-shadow: 0 0 14px rgba(0, 245, 255, 0.18);
+}
+
 .diagnostic-strip {
   position: absolute;
   right: max(16px, env(safe-area-inset-right));
@@ -532,14 +702,16 @@ button {
   padding: 8px 10px;
   border: 1px solid rgba(143, 251, 255, 0.2);
   border-radius: 8px;
+  overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
-    var(--panel-strong);
+    var(--panel-strong),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 42px);
   box-shadow:
     0 0 20px rgba(0, 245, 255, 0.1),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px) saturate(1.18);
+  -webkit-backdrop-filter: blur(12px) saturate(1.18);
 }
 
 .diagnostic-strip span {
@@ -582,16 +754,18 @@ button {
   inset: 0;
   border: 1px solid rgba(143, 251, 255, 0.44);
   border-radius: 50%;
+  overflow: hidden;
   background:
     radial-gradient(circle at 50% 50%, rgba(0, 245, 255, 0.14), transparent 42%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
-    linear-gradient(135deg, rgba(14, 25, 55, 0.62), rgba(10, 4, 24, 0.48));
+    linear-gradient(135deg, rgba(14, 25, 55, 0.62), rgba(10, 4, 24, 0.48)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 32px);
   box-shadow:
     0 0 24px rgba(0, 245, 255, 0.2),
     0 10px 26px rgba(0, 0, 0, 0.26),
     inset 0 0 24px rgba(255, 43, 214, 0.12);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
 }
 
 .joystick-line {
@@ -641,6 +815,7 @@ button {
   height: 94px;
   border: 1px solid rgba(255, 43, 214, 0.54);
   border-radius: 50%;
+  overflow: hidden;
   color: var(--text);
   font-size: 0.72rem;
   font-weight: 900;
@@ -648,7 +823,8 @@ button {
   background:
     radial-gradient(circle at 50% 30%, rgba(247, 251, 255, 0.24), transparent 24%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.02)),
-    linear-gradient(145deg, rgba(255, 43, 214, 0.38), rgba(0, 245, 255, 0.16));
+    linear-gradient(145deg, rgba(255, 43, 214, 0.38), rgba(0, 245, 255, 0.16)),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 24px);
   box-shadow:
     0 0 28px rgba(255, 43, 214, 0.24),
     0 12px 30px rgba(0, 0, 0, 0.28),
@@ -737,6 +913,12 @@ button {
     margin-bottom: 8px;
   }
 
+  .hud-lives {
+    top: calc(var(--board-top, 220px) - 16px);
+    gap: 8px;
+    padding: 5px 12px;
+  }
+
   .hud-cards {
     gap: 6px;
   }
@@ -800,8 +982,8 @@ button {
   .diagnostic-strip,
   .joystick-ring,
   .orientation-mask {
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px) saturate(1.12);
+    -webkit-backdrop-filter: blur(6px) saturate(1.12);
   }
 
   .hud-strip {
@@ -874,6 +1056,12 @@ button {
 
   .hud-topline {
     margin-bottom: 8px;
+  }
+
+  .hud-lives {
+    top: calc(var(--board-top, 220px) - 14px);
+    gap: 6px;
+    padding: 4px 10px;
   }
 
   .brand-mark {

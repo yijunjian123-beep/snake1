@@ -10,7 +10,7 @@ import type {
 
 const KEY_ACTIONS: ReadonlyMap<string, InputAction> = new Map([
   ["Enter", "start"],
-  ["Space", "speed-accelerate"],
+  ["Space", "pause"],
   ["ShiftLeft", "speed-brake"],
   ["ShiftRight", "speed-brake"],
   ["KeyP", "pause"],

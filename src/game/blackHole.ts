@@ -5,10 +5,15 @@ import type { BlackHole, BlackHoleAlert, BlackHoleBand, BlackHoleCue, BlackHoleK
 export interface BlackHoleVariant {
   bodyRadiusCells: number;
   influenceRadiusCells: number;
+  foodAvoidRadiusCells: number;
   safeSpawnDistance: number;
   wallPadding: number;
   activationDelayMs: number;
   pulseSpeed: number;
+  bandThresholds: {
+    strong: number;
+    medium?: number;
+  };
   chargeThresholds: {
     strong: number;
     medium?: number;
@@ -77,7 +82,8 @@ const PERPENDICULAR_PAIRS: Record<Direction, readonly [Direction, Direction]> = 
 
 const KIND_PRIORITY: Record<BlackHoleKind, number> = {
   small: 0,
-  large: 1,
+  medium: 1,
+  large: 2,
 };
 
 const BAND_PRIORITY: Record<BlackHoleBand, number> = {
@@ -89,7 +95,7 @@ const BAND_PRIORITY: Record<BlackHoleBand, number> = {
 
 export const BLACK_HOLE_CONFIG = {
   unlockLength: 7,
-  maxCount: 3,
+  maxCount: 4,
   midScoreThreshold: 80,
   midLengthThreshold: 12,
   lateScoreThreshold: 160,
@@ -98,22 +104,49 @@ export const BLACK_HOLE_CONFIG = {
     small: {
       bodyRadiusCells: 0,
       influenceRadiusCells: 3,
+      foodAvoidRadiusCells: 1,
       safeSpawnDistance: 5,
       wallPadding: 1,
       activationDelayMs: 420,
       pulseSpeed: 1.65,
+      bandThresholds: {
+        strong: 1,
+      },
       chargeThresholds: {
         strong: 1,
         weak: 2,
       },
     },
-    large: {
-      bodyRadiusCells: 1,
+    medium: {
+      bodyRadiusCells: 0,
       influenceRadiusCells: 6,
+      foodAvoidRadiusCells: 2,
       safeSpawnDistance: 8,
       wallPadding: 2,
       activationDelayMs: 660,
       pulseSpeed: 1.25,
+      bandThresholds: {
+        strong: 2,
+        medium: 4,
+      },
+      chargeThresholds: {
+        strong: 1,
+        medium: 2,
+        weak: 3,
+      },
+    },
+    large: {
+      bodyRadiusCells: 0,
+      influenceRadiusCells: 8,
+      foodAvoidRadiusCells: 3,
+      safeSpawnDistance: 10,
+      wallPadding: 3,
+      activationDelayMs: 900,
+      pulseSpeed: 0.95,
+      bandThresholds: {
+        strong: 2,
+        medium: 5,
+      },
       chargeThresholds: {
         strong: 1,
         medium: 2,
@@ -156,7 +189,63 @@ export function getBlackHoleKindForSpawn(progress: GameProgress, grid: GridMetri
     return "large";
   }
 
+  if (progress.score >= BLACK_HOLE_CONFIG.midScoreThreshold || progress.snakeLength >= BLACK_HOLE_CONFIG.midLengthThreshold) {
+    return "medium";
+  }
+
   return "small";
+}
+
+export function chooseBlackHoleSpawnKind(
+  existingKinds: readonly BlackHoleKind[],
+  desiredCount: number,
+  random: () => number = Math.random,
+): BlackHoleKind {
+  const hasSmall = existingKinds.includes("small");
+  const hasMedium = existingKinds.includes("medium");
+  const hasLarge = existingKinds.includes("large");
+
+  if (desiredCount <= 1) {
+    return "small";
+  }
+
+  if (desiredCount === 2) {
+    if (!hasSmall) {
+      return "small";
+    }
+
+    if (!hasMedium) {
+      return "medium";
+    }
+
+    return random() < 0.5 ? "small" : "medium";
+  }
+
+  if (desiredCount === 3) {
+    if (!hasSmall) {
+      return "small";
+    }
+
+    if (!hasMedium) {
+      return "medium";
+    }
+
+    if (!hasLarge) {
+      return "large";
+    }
+
+    return random() < 0.5 ? "small" : "medium";
+  }
+
+  if (!hasSmall) {
+    return "small";
+  }
+
+  if (!hasLarge) {
+    return "large";
+  }
+
+  return random() < 0.5 ? "small" : "medium";
 }
 
 export function getBlackHoleVariant(kind: BlackHoleKind): BlackHoleVariant {
@@ -197,7 +286,7 @@ export function getBlackHoleSpawnExclusionRadiusCells(blackHole: BlackHole): num
 }
 
 export function getBlackHoleFoodAvoidRadiusCells(blackHole: BlackHole): number {
-  return getBlackHoleCoreRadiusCells(blackHole) + 1;
+  return getBlackHoleVariant(blackHole.kind).foodAvoidRadiusCells;
 }
 
 export function getBlackHoleChargeThreshold(blackHole: BlackHole, band: Exclude<BlackHoleBand, "core">): number {
@@ -282,6 +371,7 @@ export function getBlackHoleBandForCell(cell: GridCell, blackHole: BlackHole, cu
 
   const distance = getChebyshevDistance(cell, blackHole.cell);
   const variant = getBlackHoleVariant(blackHole.kind);
+  const bandThresholds = variant.bandThresholds;
 
   if (distance <= variant.bodyRadiusCells) {
     return "core";
@@ -292,14 +382,14 @@ export function getBlackHoleBandForCell(cell: GridCell, blackHole: BlackHole, cu
   }
 
   if (blackHole.kind === "small") {
-    return distance <= 1 ? "strong" : "weak";
+    return distance <= bandThresholds.strong ? "strong" : "weak";
   }
 
-  if (distance <= 2) {
+  if (distance <= bandThresholds.strong) {
     return "strong";
   }
 
-  if (distance <= 4) {
+  if (bandThresholds.medium !== undefined && distance <= bandThresholds.medium) {
     return "medium";
   }
 

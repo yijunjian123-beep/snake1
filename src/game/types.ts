@@ -1,14 +1,16 @@
-export type GamePhase = "ready" | "playing" | "paused" | "gameOver";
+export type GamePhase = "ready" | "playing" | "revivePrompt" | "reviving" | "paused" | "gameOver";
 
 export type Direction = "up" | "right" | "down" | "left";
 
-export type BlackHoleKind = "small" | "large";
+export type BlackHoleKind = "small" | "medium" | "large";
 
 export type BlackHoleBand = "core" | "strong" | "medium" | "weak";
 
 export type StarBeastState = "spawning" | "patrol" | "chase" | "dead";
 
 export type StarBeastDeathCause = "player_body" | "black_hole";
+
+export type DeathReason = "wall" | "snake_body" | "black_hole" | "star_beast" | "unknown";
 
 export type InputSource = "keyboard" | "pointer";
 
@@ -72,6 +74,11 @@ export interface StarBeast {
   aiDecisionCooldown: number;
   turnCommitTicks: number;
   spawnGraceTime: number;
+  coreScanStepCount: number;
+  nextCoreHuntAt: number;
+  coreHuntUntil: number;
+  nextAttackAt: number;
+  attackUntil: number;
   speedFactor: number;
   aggroRadius: number;
   loseAggroRadius: number;
@@ -163,13 +170,17 @@ export interface GameSnapshot {
   blackHoles: readonly BlackHole[];
   blackHoleAlert: BlackHoleAlert | null;
   blackHoleCue: BlackHoleCue | null;
+  rewardBurstOrigin: GridCell | null;
   score: number;
   highScore: number;
+  livesRemaining: number;
+  deathReason: DeathReason | null;
   direction: Direction;
   speedMode: SpeedMode;
   speedMultiplier: number;
   speedCue: SpeedCue | null;
   wallGrace: WallGraceSnapshot | null;
+  reviveCountdownSeconds: number;
 }
 
 export interface FrameInfo {
@@ -221,6 +232,11 @@ export interface GameUiElements {
   root: HTMLElement;
   hudStrip: HTMLElement;
   startPanel: HTMLElement;
+  panelPrimaryLabel: HTMLElement;
+  panelPrimaryValue: HTMLElement;
+  panelSecondaryLabel: HTMLElement;
+  panelMetaLabel: HTMLElement;
+  lifeHearts: readonly HTMLElement[];
   lengthLabel: HTMLElement;
   unlockTitleLabel: HTMLElement;
   unlockValueLabel: HTMLElement;

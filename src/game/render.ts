@@ -1,6 +1,9 @@
 import {
+  getBlackHoleAlertRadiusCells,
+  getBlackHoleCoreRadiusCells,
   getBlackHoleFormationProgress,
-  getBlackHoleVariant,
+  getBlackHoleInfluenceRadiusCells,
+  getBlackHolePulseSpeed,
   isBlackHoleActive,
 } from "./blackHole";
 import { STAR_BEAST_CONFIG } from "./starBeast";
@@ -28,6 +31,28 @@ interface Star {
   hue: number;
   layer: number;
   twinkle: number;
+}
+
+interface NebulaPatch {
+  x: number;
+  y: number;
+  radius: number;
+  stretchX: number;
+  stretchY: number;
+  rotation: number;
+  hue: number;
+  alpha: number;
+}
+
+interface BackgroundDust {
+  x: number;
+  y: number;
+  size: number;
+  alpha: number;
+  hue: number;
+  streak: number;
+  driftX: number;
+  driftY: number;
 }
 
 interface Particle {
@@ -106,6 +131,32 @@ const QUALITY_LEVELS: readonly RenderQualityState[] = [
 ] as const;
 
 const DEFAULT_QUALITY_LEVEL = 2;
+const TAU = Math.PI * 2;
+const BLACK_HOLE_VISUAL = {
+  haloInnerRadiusScale: 0.08,
+  haloRadiusPad: 0.18,
+  haloPulseScale: 0.05,
+  haloBaseAlpha: 0.26,
+  haloMidAlpha: 0.2,
+  haloOuterAlpha: 0.08,
+  abyssMidTintAlpha: 0.99,
+  abyssOuterTintAlpha: 0.84,
+  abyssEdgeLiftAlpha: 0.24,
+  bodyRadiusScale: 0.22,
+  bodyPulseScale: 0.02,
+  coreNodeRadiusScale: 0.075,
+  coreNodeGlowScale: 0.19,
+  swirlCount: 2,
+  swirlRadiusPad: 0.58,
+  swirlRadiusStep: 0.16,
+  swirlAlpha: 0.18,
+  swirlWidthScale: 0.028,
+  particleCount: 2,
+  particleRadiusScale: 0.042,
+  particleTrailScale: 0.032,
+  particleAlpha: 0.42,
+  reducedMotionScale: 0.34,
+} as const;
 
 let activeRenderQuality: RenderQualityState = QUALITY_LEVELS[DEFAULT_QUALITY_LEVEL] ?? QUALITY_LEVELS[0]!;
 
@@ -128,6 +179,7 @@ function easeOutCubic(value: number): number {
 
 export interface StarCoreBurstState {
   scale: number;
+  alpha: number;
   clump: number;
 }
 
@@ -139,6 +191,7 @@ export function getStarCoreBurstState(core: Pick<StarCore, "source" | "spawnTime
 
     return {
       scale: lerp(1.03, 1.12, rise),
+      alpha: lerp(0.94, 1, rise),
       clump: (1 - rise) * 0.03,
     };
   }
@@ -148,6 +201,7 @@ export function getStarCoreBurstState(core: Pick<StarCore, "source" | "spawnTime
 
     return {
       scale: 1.12,
+      alpha: 1,
       clump: (1 - hang) * 0.015,
     };
   }
@@ -156,7 +210,39 @@ export function getStarCoreBurstState(core: Pick<StarCore, "source" | "spawnTime
 
   return {
     scale: lerp(1.12, 1, settle),
+    alpha: lerp(1, 0.96, settle),
     clump: (1 - settle) * 0.01,
+  };
+}
+
+export interface CoreGlyphMetrics {
+  pulse: number;
+  outerRadius: number;
+  innerRadius: number;
+  haloRadius: number;
+  pointCount: number;
+  pointInnerRatio: number;
+}
+
+export function getCoreGlyphMetrics(
+  source: StarCore["source"],
+  index: number,
+  time: number,
+  cellSize: number,
+): CoreGlyphMetrics {
+  void source;
+
+  const pulse = 0.72 + Math.sin(time * 8.4 + index * 1.3) * 0.28;
+  const outerRadius = cellSize * (0.34 + pulse * 0.07 + index * 0.02);
+  const innerRadius = outerRadius * 0.43;
+
+  return {
+    pulse,
+    outerRadius,
+    innerRadius,
+    haloRadius: outerRadius * 1.72,
+    pointCount: 12,
+    pointInnerRatio: 0.43,
   };
 }
 
@@ -213,6 +299,105 @@ function createStars(): Star[] {
       twinkle: seededUnit(index, 8) * Math.PI * 2,
     };
   });
+}
+
+function createNebulaPatches(): NebulaPatch[] {
+  return [
+    { x: 0.18, y: 0.22, radius: 0.24, stretchX: 1.72, stretchY: 0.92, rotation: -0.58, hue: 188, alpha: 0.18 },
+    { x: 0.77, y: 0.18, radius: 0.19, stretchX: 1.86, stretchY: 0.8, rotation: 0.72, hue: 316, alpha: 0.15 },
+    { x: 0.53, y: 0.72, radius: 0.28, stretchX: 1.56, stretchY: 0.84, rotation: -0.24, hue: 248, alpha: 0.13 },
+  ];
+}
+
+function createBackgroundDust(): BackgroundDust[] {
+  return Array.from({ length: 42 }, (_, index) => {
+    const layer = seededUnit(index, 31);
+
+    return {
+      x: seededUnit(index, 11),
+      y: seededUnit(index, 12),
+      size: 0.32 + seededUnit(index, 13) * (layer > 0.7 ? 1.1 : 0.7),
+      alpha: 0.018 + seededUnit(index, 14) * 0.05,
+      hue: 176 + seededUnit(index, 15) * 150,
+      streak: seededUnit(index, 16),
+      driftX: seededUnit(index, 17) - 0.5,
+      driftY: seededUnit(index, 18) - 0.5,
+    };
+  });
+}
+
+function drawNebulaPatch(context: CanvasRenderingContext2D, size: CanvasSize, patch: NebulaPatch): void {
+  const centerX = size.width * patch.x;
+  const centerY = size.height * patch.y;
+  const radius = Math.max(size.width, size.height) * patch.radius;
+
+  context.save();
+  context.translate(centerX, centerY);
+  context.rotate(patch.rotation);
+  context.scale(patch.stretchX, patch.stretchY);
+  context.shadowColor = `hsl(${patch.hue} 100% 68%)`;
+  context.shadowBlur = 18 * activeRenderQuality.glowScale;
+
+  const glow = context.createRadialGradient(0, 0, 0, 0, 0, radius);
+  glow.addColorStop(0, `hsl(${patch.hue} 100% 74% / ${patch.alpha})`);
+  glow.addColorStop(0.18, `hsl(${patch.hue + 16} 100% 66% / ${patch.alpha * 0.72})`);
+  glow.addColorStop(0.46, `hsl(${patch.hue + 42} 100% 56% / ${patch.alpha * 0.3})`);
+  glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = glow;
+  context.beginPath();
+  context.arc(0, 0, radius, 0, TAU);
+  context.fill();
+
+  const core = context.createRadialGradient(0, 0, 0, 0, 0, radius * 0.42);
+  core.addColorStop(0, `hsl(${patch.hue + 10} 100% 84% / ${patch.alpha * 0.72})`);
+  core.addColorStop(0.34, `hsl(${patch.hue + 26} 100% 70% / ${patch.alpha * 0.34})`);
+  core.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = core;
+  context.beginPath();
+  context.arc(0, 0, radius * 0.42, 0, TAU);
+  context.fill();
+
+  context.restore();
+}
+
+function drawBackgroundDust(
+  context: CanvasRenderingContext2D,
+  size: CanvasSize,
+  dustField: readonly BackgroundDust[],
+): void {
+  const motionScale = prefersReducedMotion() ? 0.25 : 1;
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.lineCap = "round";
+
+  for (const dust of dustField) {
+    const x = dust.x * size.width;
+    const y = dust.y * size.height;
+    const drift = (dust.driftX + dust.driftY) * 0.5;
+    const trailLength = size.width * (0.006 + dust.streak * 0.01);
+    const angle = drift * Math.PI * 0.8;
+
+    context.globalAlpha = dust.alpha;
+    context.shadowColor = `hsl(${dust.hue} 100% 70%)`;
+    context.shadowBlur = 4 * activeRenderQuality.glowScale;
+    context.fillStyle = `hsl(${dust.hue} 100% 76%)`;
+    context.beginPath();
+    context.arc(x, y, dust.size, 0, TAU);
+    context.fill();
+
+    if (dust.streak > 0.7) {
+      context.globalAlpha = dust.alpha * 0.46 * motionScale;
+      context.strokeStyle = `hsl(${dust.hue} 100% 74%)`;
+      context.lineWidth = Math.max(0.8, dust.size * 0.5);
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(x - Math.cos(angle) * trailLength, y - Math.sin(angle) * trailLength * 0.74);
+      context.stroke();
+    }
+  }
+
+  context.restore();
 }
 
 function getCanvasSize(canvas: HTMLCanvasElement, dprCap: number = MAX_DPR): CanvasSize {
@@ -459,6 +644,14 @@ function findRemovedFood(previousFoods: readonly GridCell[], currentFoods: reado
   return previousFoods[0] ?? null;
 }
 
+export function resolveRewardBurstOrigin(
+  snapshot: Pick<GameSnapshot, "rewardBurstOrigin" | "foods">,
+  previousFoods: readonly GridCell[],
+  head: GridCell | null,
+): GridCell | null {
+  return snapshot.rewardBurstOrigin ?? findRemovedFood(previousFoods, snapshot.foods) ?? head;
+}
+
 function rewardShakeDirection(grid: GridMetrics, point: { x: number; y: number }): { x: number; y: number } {
   const boardCenterX = grid.offsetX + grid.columns * grid.cellSize * 0.5;
   const boardCenterY = grid.offsetY + grid.rows * grid.cellSize * 0.5;
@@ -533,7 +726,7 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   }
 
   if (scoreIncreased) {
-    const burstCell = findRemovedFood(state.previousFoods, snapshot.foods) ?? head;
+    const burstCell = resolveRewardBurstOrigin(snapshot, state.previousFoods, head);
 
     if (burstCell) {
       const center = cellCenter(snapshot.grid, burstCell);
@@ -599,7 +792,13 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   state.previousFoods = snapshot.foods.map((food) => ({ ...food }));
 }
 
-function drawBackground(context: CanvasRenderingContext2D, size: CanvasSize, time: number): void {
+function drawBackground(
+  context: CanvasRenderingContext2D,
+  size: CanvasSize,
+  time: number,
+  nebulaPatches: readonly NebulaPatch[],
+  backgroundDust: readonly BackgroundDust[],
+): void {
   const pulse = 0.5 + Math.sin(time * 1.35) * 0.5;
   const centerX = size.width * (0.48 + Math.sin(time * 0.12) * 0.04);
   const centerY = size.height * (0.42 + Math.cos(time * 0.1) * 0.04);
@@ -616,14 +815,22 @@ function drawBackground(context: CanvasRenderingContext2D, size: CanvasSize, tim
 
   context.save();
   context.globalCompositeOperation = "lighter";
-  context.globalAlpha = 0.22 + pulse * 0.08;
+  context.globalAlpha = 1;
 
+  for (const patch of nebulaPatches) {
+    drawNebulaPatch(context, size, patch);
+  }
+
+  context.globalAlpha = 0.2 + pulse * 0.08;
   const cyanWash = context.createLinearGradient(0, 0, size.width, size.height);
-  cyanWash.addColorStop(0, "rgba(0, 245, 255, 0.16)");
-  cyanWash.addColorStop(0.42, "rgba(0, 245, 255, 0.02)");
-  cyanWash.addColorStop(1, "rgba(255, 43, 214, 0.1)");
+  cyanWash.addColorStop(0, "rgba(0, 245, 255, 0.18)");
+  cyanWash.addColorStop(0.42, "rgba(0, 245, 255, 0.025)");
+  cyanWash.addColorStop(1, "rgba(255, 43, 214, 0.12)");
   context.fillStyle = cyanWash;
   context.fillRect(0, 0, size.width, size.height);
+
+  context.globalAlpha = 1;
+  drawBackgroundDust(context, size, backgroundDust);
 
   context.globalAlpha = 0.08;
   context.fillStyle = "#ffffff";
@@ -645,7 +852,7 @@ function drawBackground(context: CanvasRenderingContext2D, size: CanvasSize, tim
     Math.max(size.width, size.height) * 0.78,
   );
   vignette.addColorStop(0, "rgba(0, 0, 0, 0)");
-  vignette.addColorStop(1, "rgba(0, 0, 0, 0.62)");
+  vignette.addColorStop(1, "rgba(0, 0, 0, 0.72)");
   context.fillStyle = vignette;
   context.fillRect(0, 0, size.width, size.height);
 }
@@ -704,6 +911,30 @@ function drawStars(context: CanvasRenderingContext2D, size: CanvasSize, stars: r
     context.moveTo(x, y);
     context.lineTo(x - length, y - length * 0.28);
     context.stroke();
+  }
+
+  const dustCount = Math.max(10, Math.round(12 + activeRenderQuality.ambientAlpha * 8));
+  const motionScale = prefersReducedMotion() ? 0.18 : 1;
+
+  for (let index = 0; index < dustCount; index += 1) {
+    const seed = index + 64;
+    const baseX = seededUnit(seed, 1);
+    const baseY = seededUnit(seed, 2);
+    const driftX = Math.sin(time * (0.018 + seededUnit(seed, 3) * 0.02) + seed * 0.41) * 0.012 * motionScale;
+    const driftY = Math.cos(time * (0.022 + seededUnit(seed, 4) * 0.018) + seed * 0.29) * 0.01 * motionScale;
+    const x = ((baseX + driftX) % 1 + 1) % 1 * size.width;
+    const y = ((baseY + driftY) % 1 + 1) % 1 * size.height;
+    const radius = 0.3 + seededUnit(seed, 5) * 0.9;
+    const alpha = (0.015 + seededUnit(seed, 6) * 0.04) * activeRenderQuality.ambientAlpha;
+    const hue = 182 + seededUnit(seed, 7) * 120;
+
+    context.globalAlpha = alpha;
+    context.shadowColor = `hsl(${hue} 100% 74%)`;
+    context.shadowBlur = 5 * activeRenderQuality.glowScale;
+    context.fillStyle = `hsl(${hue} 100% 76%)`;
+    context.beginPath();
+    context.arc(x, y, radius, 0, TAU);
+    context.fill();
   }
 
   context.restore();
@@ -778,6 +1009,26 @@ function drawCoreGlow(context: CanvasRenderingContext2D, size: CanvasSize, time:
   context.arc(0, 0, 4 + pulse * 3, 0, Math.PI * 2);
   context.fill();
 
+  context.globalAlpha = 0.18 + pulse * 0.08;
+  context.shadowBlur = 12 * activeRenderQuality.glowScale;
+  context.strokeStyle = "rgba(255, 255, 255, 0.42)";
+  context.lineWidth = 0.9;
+  context.beginPath();
+  context.ellipse(0, 0, ringRadius * 0.72, ringRadius * 0.24, -0.46, 0, TAU);
+  context.stroke();
+
+  context.globalAlpha = 0.32 + pulse * 0.1;
+  for (let index = 0; index < 6; index += 1) {
+    const orbitAngle = time * (0.58 + index * 0.05) + index * (TAU / 6);
+    const orbitX = Math.cos(orbitAngle) * ringRadius * (1.02 + (index % 2) * 0.08);
+    const orbitY = Math.sin(orbitAngle) * ringRadius * 0.3;
+
+    context.fillStyle = index % 2 === 0 ? "#dbff52" : "#ffffff";
+    context.beginPath();
+    context.arc(orbitX, orbitY, 1.1 + index * 0.08, 0, TAU);
+    context.fill();
+  }
+
   context.restore();
 }
 
@@ -817,19 +1068,61 @@ function drawBoard(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
   const width = grid.columns * grid.cellSize;
   const height = grid.rows * grid.cellSize;
   const pulse = 0.5 + Math.sin(time * 2.1) * 0.5;
+  const frameX = grid.offsetX - 9;
+  const frameY = grid.offsetY - 9;
+  const frameWidth = width + 18;
+  const frameHeight = height + 18;
+  const cornerLength = Math.max(10, Math.min(24, grid.cellSize * 0.92));
 
   context.save();
   context.globalCompositeOperation = "source-over";
   context.shadowColor = "rgba(0, 245, 255, 0.54)";
   context.shadowBlur = 30 + pulse * 18;
-  context.fillStyle = "rgba(1, 8, 20, 0.7)";
-  fillRoundedRect(context, grid.offsetX - 9, grid.offsetY - 9, width + 18, height + 18, 14);
+  context.fillStyle = "rgba(1, 8, 20, 0.72)";
+  fillRoundedRect(context, frameX, frameY, frameWidth, frameHeight, 14);
+
+  context.shadowBlur = 0;
+  context.globalAlpha = 0.72;
+  const sheen = context.createLinearGradient(frameX, frameY, frameX + frameWidth, frameY + frameHeight);
+  sheen.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+  sheen.addColorStop(0.36, "rgba(0, 245, 255, 0.02)");
+  sheen.addColorStop(0.76, "rgba(255, 43, 214, 0.03)");
+  sheen.addColorStop(1, "rgba(0, 0, 0, 0.08)");
+  context.fillStyle = sheen;
+  fillRoundedRect(context, frameX, frameY, frameWidth, frameHeight, 14);
 
   context.shadowColor = "rgba(255, 43, 214, 0.28)";
   context.shadowBlur = 22;
-  context.strokeStyle = "rgba(143, 251, 255, 0.52)";
-  context.lineWidth = 1;
+  context.strokeStyle = "rgba(143, 251, 255, 0.62)";
+  context.lineWidth = 1.1;
   context.strokeRect(grid.offsetX - 0.5, grid.offsetY - 0.5, width + 1, height + 1);
+
+  context.shadowBlur = 0;
+  context.globalAlpha = 0.26;
+  context.strokeStyle = "rgba(255, 255, 255, 0.16)";
+  context.lineWidth = 1;
+  context.strokeRect(frameX + 4.5, frameY + 4.5, frameWidth - 9, frameHeight - 9);
+
+  context.globalAlpha = 0.8;
+  context.shadowColor = "#00f5ff";
+  context.shadowBlur = 14 * activeRenderQuality.glowScale;
+  context.strokeStyle = "rgba(0, 245, 255, 0.7)";
+  context.lineWidth = Math.max(1.2, grid.cellSize * 0.05);
+
+  const corners: Array<[number, number, number, number]> = [
+    [frameX + 2, frameY + 2, 1, 1],
+    [frameX + frameWidth - 2, frameY + 2, -1, 1],
+    [frameX + 2, frameY + frameHeight - 2, 1, -1],
+    [frameX + frameWidth - 2, frameY + frameHeight - 2, -1, -1],
+  ];
+
+  for (const [cornerX, cornerY, dirX, dirY] of corners) {
+    context.beginPath();
+    context.moveTo(cornerX, cornerY + dirY * cornerLength * 0.46);
+    context.lineTo(cornerX, cornerY);
+    context.lineTo(cornerX + dirX * cornerLength * 0.46, cornerY);
+    context.stroke();
+  }
 
   context.shadowBlur = 0;
   context.globalAlpha = 0.22;
@@ -870,9 +1163,8 @@ function drawFood(context: CanvasRenderingContext2D, snapshot: GameSnapshot, tim
       continue;
     }
     const center = cellCenter(grid, food);
-    const pulse = 0.72 + Math.sin(time * 8.4 + index * 1.3) * 0.28;
-    const outerRadius = grid.cellSize * (0.34 + pulse * 0.07 + index * 0.02);
-    const innerRadius = outerRadius * 0.43;
+    const glyphMetrics = getCoreGlyphMetrics("regular", index, time, grid.cellSize);
+    const { pulse, outerRadius, innerRadius, haloRadius, pointCount } = glyphMetrics;
 
     context.save();
     context.translate(center.x, center.y);
@@ -893,7 +1185,7 @@ function drawFood(context: CanvasRenderingContext2D, snapshot: GameSnapshot, tim
     context.globalAlpha = 1;
     context.fillStyle = index === 0 ? "rgba(219, 255, 82, 0.24)" : "rgba(0, 245, 255, 0.18)";
     context.beginPath();
-    context.arc(0, 0, outerRadius * 1.72, 0, Math.PI * 2);
+    context.arc(0, 0, haloRadius, 0, Math.PI * 2);
     context.fill();
 
     const starGradient = context.createRadialGradient(-outerRadius * 0.22, -outerRadius * 0.25, 0, 0, 0, outerRadius);
@@ -904,9 +1196,9 @@ function drawFood(context: CanvasRenderingContext2D, snapshot: GameSnapshot, tim
     context.shadowBlur = 32;
     context.beginPath();
 
-    for (let point = 0; point < 12; point += 1) {
+    for (let point = 0; point < pointCount; point += 1) {
       const radius = point % 2 === 0 ? outerRadius : innerRadius;
-      const angle = -Math.PI / 2 + (point * Math.PI) / 6;
+      const angle = -Math.PI / 2 + (point * Math.PI * 2) / pointCount;
       const x = Math.cos(angle) * radius;
       const y = Math.sin(angle) * radius;
 
@@ -945,45 +1237,44 @@ function drawStarCores(context: CanvasRenderingContext2D, snapshot: GameSnapshot
     const ageMs = time * 1000 - core.spawnTime * 1000;
     const lifeProgress = clamp(ageMs / Math.max(1, core.lifetimeMs), 0, 1);
     const burstState = getStarCoreBurstState(core, time);
-    const isStarBeastCore = core.source === "star_beast";
     const spawnProgress = clamp(ageMs / 180, 0, 1);
-    const sourceGlowScale = isStarBeastCore ? 1.08 : 1;
-    const alpha = spawnProgress * clamp((1 - lifeProgress) * 1.2, 0.25, 1);
+    const alpha = spawnProgress * clamp((1 - lifeProgress) * 1.2, 0.25, 1) * burstState.alpha;
     const centerX = grid.offsetX + core.x * grid.cellSize;
     const centerY = grid.offsetY + core.y * grid.cellSize;
-    const burstTarget = core.burstOrigin ? cellCenter(grid, core.burstOrigin) : null;
-    const renderX = burstTarget ? lerp(centerX, burstTarget.x, burstState.clump) : centerX;
-    const renderY = burstTarget ? lerp(centerY, burstTarget.y, burstState.clump) : centerY;
-    const pulse = 0.72 + Math.sin(time * 9.2 + index * 1.7 + core.id * 0.01) * 0.28;
-    const radius = grid.cellSize * (0.12 + pulse * 0.08);
-    const shadowColor = isStarBeastCore ? "#00f5ff" : "#dbff52";
-    const accentColor = isStarBeastCore ? "#00f5ff" : "#dbff52";
+    const burstTightness = 1 - burstState.clump * 0.18;
+    const glyphMetrics = getCoreGlyphMetrics(core.source, index, time, grid.cellSize);
+    const { pulse, outerRadius: baseOuterRadius, innerRadius: baseInnerRadius, haloRadius: baseHaloRadius, pointCount } = glyphMetrics;
+    const outerRadius = baseOuterRadius * burstTightness;
+    const innerRadius = baseInnerRadius * burstTightness;
+    const haloRadius = baseHaloRadius * burstTightness;
+    const shadowColor = "#dbff52";
+    const accentColor = "#dbff52";
 
     context.save();
-    context.translate(renderX, renderY);
+    context.translate(centerX, centerY);
     context.scale(burstState.scale, burstState.scale);
     context.rotate(time * 2.2 + core.id * 0.017);
-    context.globalAlpha = alpha * sourceGlowScale;
+    context.globalAlpha = alpha;
     context.shadowColor = shadowColor;
-    context.shadowBlur = (14 + pulse * 8) * burstState.scale * sourceGlowScale;
+    context.shadowBlur = (14 + pulse * 8) * burstState.scale;
 
-    const halo = context.createRadialGradient(0, 0, 0, 0, 0, grid.cellSize * (0.44 + pulse * 0.14));
+    const halo = context.createRadialGradient(0, 0, 0, 0, 0, haloRadius);
     halo.addColorStop(0, "rgba(255, 255, 255, 0.92)");
-    halo.addColorStop(0.34, isStarBeastCore ? "rgba(0, 245, 255, 0.34)" : "rgba(219, 255, 82, 0.38)");
-    halo.addColorStop(0.64, isStarBeastCore ? "rgba(255, 43, 214, 0.22)" : "rgba(0, 245, 255, 0.18)");
+    halo.addColorStop(0.34, "rgba(219, 255, 82, 0.38)");
+    halo.addColorStop(0.64, "rgba(0, 245, 255, 0.18)");
     halo.addColorStop(1, "rgba(0, 0, 0, 0)");
     context.fillStyle = halo;
     context.beginPath();
-    context.arc(0, 0, grid.cellSize * (0.42 + pulse * 0.14), 0, Math.PI * 2);
+    context.arc(0, 0, haloRadius, 0, Math.PI * 2);
     context.fill();
 
     const coreGradient = context.createRadialGradient(
-      -radius * 0.2,
-      -radius * 0.24,
+      -outerRadius * 0.22,
+      -outerRadius * 0.25,
       0,
       0,
       0,
-      grid.cellSize * 0.26,
+      outerRadius,
     );
     coreGradient.addColorStop(0, "#ffffff");
     coreGradient.addColorStop(0.28, core.id % 2 === 0 ? accentColor : "#ff2bd6");
@@ -991,11 +1282,11 @@ function drawStarCores(context: CanvasRenderingContext2D, snapshot: GameSnapshot
     context.fillStyle = coreGradient;
     context.beginPath();
 
-    for (let point = 0; point < 10; point += 1) {
-      const ratio = point % 2 === 0 ? 1 : 0.48;
-      const angle = -Math.PI / 2 + (point / 10) * Math.PI * 2;
-      const x = Math.cos(angle) * grid.cellSize * ratio * 0.22;
-      const y = Math.sin(angle) * grid.cellSize * ratio * 0.22;
+    for (let point = 0; point < pointCount; point += 1) {
+      const radius = point % 2 === 0 ? outerRadius : innerRadius;
+      const angle = -Math.PI / 2 + (point * Math.PI * 2) / pointCount;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
 
       if (point === 0) {
         context.moveTo(x, y);
@@ -1007,11 +1298,11 @@ function drawStarCores(context: CanvasRenderingContext2D, snapshot: GameSnapshot
     context.closePath();
     context.fill();
 
-    context.globalAlpha = alpha * 0.48 * sourceGlowScale;
-    context.strokeStyle = isStarBeastCore ? "rgba(255, 255, 255, 0.96)" : "rgba(255, 255, 255, 0.9)";
+    context.globalAlpha = alpha * 0.48;
+    context.strokeStyle = "rgba(255, 255, 255, 0.9)";
     context.lineWidth = Math.max(1, grid.cellSize * 0.04);
     context.beginPath();
-    context.arc(0, 0, grid.cellSize * 0.18, 0, Math.PI * 2);
+    context.arc(0, 0, outerRadius * 0.52, 0, Math.PI * 2);
     context.stroke();
 
     context.restore();
@@ -1546,78 +1837,158 @@ export function drawWallGraceWarning(context: CanvasRenderingContext2D, snapshot
 
 function drawBlackHole(context: CanvasRenderingContext2D, snapshot: GameSnapshot, blackHole: BlackHole, time: number): void {
   const { grid } = snapshot;
-  const variant = getBlackHoleVariant(blackHole.kind);
   const center = cellCenter(grid, blackHole.cell);
   const formation = getBlackHoleFormationProgress(blackHole, time);
   const active = isBlackHoleActive(blackHole, time);
-  const pulse = 0.5 + Math.sin(time * variant.pulseSpeed + blackHole.seed * 0.01) * 0.5;
-  const influenceRadius = variant.influenceRadiusCells;
-  const preview = active ? 1 : clamp((formation - 0.16) / 0.46, 0, 1);
-  const coreRadiusCells = Math.max(0.42, variant.bodyRadiusCells);
-  const coreRadius = grid.cellSize * (0.16 + coreRadiusCells * 0.06);
-  const fieldRadius = grid.cellSize * (0.58 + influenceRadius * 0.06);
-  const warningRadius = grid.cellSize * (0.78 + (influenceRadius + 1) * 0.06);
-  const innerRingRadius = grid.cellSize * (0.34 + coreRadiusCells * 0.08);
-  const outerRingRadius = grid.cellSize * (0.58 + influenceRadius * 0.06);
-  const fieldAlpha = active ? 0.32 + pulse * 0.08 : preview * 0.22;
-  const warningAlpha = active ? 0.16 + pulse * 0.05 : preview * 0.12;
+  const pulse = 0.5 + Math.sin(time * getBlackHolePulseSpeed(blackHole) + blackHole.seed * 0.01) * 0.5;
+  const preview = active ? 1 : clamp((formation - 0.12) / 0.5, 0, 1);
+  const visibility = Math.max(0.18, preview);
+  const reducedMotion = prefersReducedMotion();
+  const motionScale = reducedMotion ? BLACK_HOLE_VISUAL.reducedMotionScale : 1;
+  const glowScale = activeRenderQuality.glowScale * motionScale;
+  const alertRadiusCells = getBlackHoleAlertRadiusCells(blackHole);
+  const influenceRadiusCells = getBlackHoleInfluenceRadiusCells(blackHole);
+  const coreRadiusCells = getBlackHoleCoreRadiusCells(blackHole);
+  const outerRadius = grid.cellSize * (alertRadiusCells + BLACK_HOLE_VISUAL.haloRadiusPad + pulse * BLACK_HOLE_VISUAL.haloPulseScale);
+  const influenceRadius = grid.cellSize * Math.max(coreRadiusCells + 0.72, influenceRadiusCells + 0.02);
+  const coreRadius = grid.cellSize * Math.max(BLACK_HOLE_VISUAL.bodyRadiusScale, coreRadiusCells + 0.24);
+  const nodeRadius = grid.cellSize * BLACK_HOLE_VISUAL.coreNodeRadiusScale;
+  const swirlBaseRadius = grid.cellSize * Math.max(coreRadiusCells + BLACK_HOLE_VISUAL.swirlRadiusPad, influenceRadiusCells * 0.44);
+  const swirlCount = reducedMotion ? 1 : BLACK_HOLE_VISUAL.swirlCount + (blackHole.kind === "small" ? 0 : 1);
+  const particleCount = reducedMotion ? 1 : BLACK_HOLE_VISUAL.particleCount;
+  const spin = time * (0.78 + seededUnit(blackHole.seed, 13) * 0.34) * motionScale + blackHole.seed * 0.008;
 
   context.save();
   context.translate(center.x, center.y);
 
-  const fieldGlow = context.createRadialGradient(0, 0, grid.cellSize * 0.05, 0, 0, fieldRadius);
-  fieldGlow.addColorStop(0, `rgba(0, 0, 0, ${0.99 - formation * 0.03})`);
-  fieldGlow.addColorStop(0.42, `rgba(7, 10, 18, ${0.9 - formation * 0.03})`);
-  fieldGlow.addColorStop(0.7, `rgba(18, 10, 28, ${0.22 + fieldAlpha * 0.16})`);
-  fieldGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.globalCompositeOperation = "source-over";
-  context.globalAlpha = 1;
-  context.fillStyle = fieldGlow;
-  context.beginPath();
-  context.arc(0, 0, fieldRadius, 0, Math.PI * 2);
-  context.fill();
-
-  const warningGlow = context.createRadialGradient(0, 0, fieldRadius * 0.72, 0, 0, warningRadius);
-  warningGlow.addColorStop(0, "rgba(0, 0, 0, 0)");
-  warningGlow.addColorStop(0.6, `rgba(255, 43, 214, ${0.02 + warningAlpha * 0.16})`);
-  warningGlow.addColorStop(0.84, `rgba(0, 245, 255, ${0.015 + warningAlpha * 0.08})`);
-  warningGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = warningGlow;
-  context.beginPath();
-  context.arc(0, 0, warningRadius, 0, Math.PI * 2);
-  context.fill();
-
+  context.save();
   context.globalCompositeOperation = "lighter";
-  context.shadowColor = active ? "#00f5ff" : "#ff2bd6";
-  context.shadowBlur = (4 + pulse * 2) * activeRenderQuality.glowScale;
-  context.strokeStyle = active ? "rgba(143, 251, 255, 0.16)" : "rgba(255, 43, 214, 0.14)";
-  context.lineWidth = Math.max(0.9, grid.cellSize * 0.03);
+  context.globalAlpha = visibility * (active ? 0.94 : 0.8);
+  context.shadowColor = "#a84eff";
+  context.shadowBlur = 16 * glowScale;
 
-  context.globalAlpha = active ? 0.86 : preview * 0.56;
+  const halo = context.createRadialGradient(0, 0, grid.cellSize * 0.08, 0, 0, outerRadius);
+  halo.addColorStop(0, `rgba(255, 43, 214, ${0.26 + pulse * 0.08})`);
+  halo.addColorStop(0.32, `rgba(176, 96, 255, ${0.2 + visibility * 0.05})`);
+  halo.addColorStop(0.7, `rgba(95, 31, 214, ${0.08 + visibility * 0.03})`);
+  halo.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = halo;
   context.beginPath();
-  context.arc(0, 0, innerRingRadius, -Math.PI / 3 + pulse * 0.14, Math.PI * 1.03 + pulse * 0.14);
+  context.arc(0, 0, outerRadius, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+
+  context.save();
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = visibility * (active ? 1 : 0.92);
+  const abyss = context.createRadialGradient(0, 0, 0, 0, 0, influenceRadius);
+  abyss.addColorStop(0, `rgba(0, 0, 0, ${0.995 - preview * 0.03})`);
+  abyss.addColorStop(0.5, `rgba(1, 2, 6, ${BLACK_HOLE_VISUAL.abyssMidTintAlpha - preview * 0.02})`);
+  abyss.addColorStop(0.84, `rgba(9, 11, 20, ${BLACK_HOLE_VISUAL.abyssOuterTintAlpha - preview * 0.06})`);
+  abyss.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = abyss;
+  context.beginPath();
+  context.arc(0, 0, influenceRadius, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.globalAlpha = visibility * (active ? 0.84 : 0.68) * motionScale;
+  context.shadowColor = active ? "#00f5ff" : "#a84eff";
+  context.shadowBlur = 10 * glowScale;
+  context.lineCap = "round";
+  context.lineJoin = "round";
+
+  const edgeRingRadius = grid.cellSize * Math.max(coreRadiusCells + 0.58, influenceRadiusCells * 0.82);
+  context.strokeStyle = active ? "rgba(143, 251, 255, 0.12)" : "rgba(193, 145, 255, 0.1)";
+  context.lineWidth = Math.max(0.9, grid.cellSize * 0.026);
+  context.beginPath();
+  context.arc(0, 0, edgeRingRadius, -Math.PI * 0.18, Math.PI * 1.18);
   context.stroke();
 
-  context.globalAlpha = active ? 0.24 + pulse * 0.05 : preview * 0.18;
-  context.beginPath();
-  context.arc(0, 0, outerRingRadius, Math.PI * 0.28 - pulse * 0.1, Math.PI * 1.38 - pulse * 0.1);
-  context.stroke();
+  for (let index = 0; index < swirlCount; index += 1) {
+    const layer = swirlCount === 1 ? 0 : index / (swirlCount - 1);
+    const arcRadius = swirlBaseRadius + index * grid.cellSize * BLACK_HOLE_VISUAL.swirlRadiusStep;
+    const arcAngle = spin + index * 1.12 + (seededUnit(blackHole.seed, index + 29) - 0.5) * 0.55;
+    const arcScaleX = 1.02 + seededUnit(blackHole.seed, index + 31) * 0.12;
+    const arcScaleY = 0.56 + seededUnit(blackHole.seed, index + 37) * 0.1;
+    const arcSpan = Math.PI * (0.54 + seededUnit(blackHole.seed, index + 41) * 0.34);
 
-  context.globalAlpha = 1;
-  context.shadowColor = "#000000";
-  context.shadowBlur = 0;
+    context.save();
+    context.rotate(arcAngle);
+    context.scale(arcScaleX, arcScaleY);
+    context.globalAlpha = visibility * (BLACK_HOLE_VISUAL.swirlAlpha - layer * 0.04) * motionScale;
+    context.strokeStyle = index % 2 === 0 ? "rgba(143, 251, 255, 0.18)" : "rgba(255, 255, 255, 0.16)";
+    context.lineWidth = Math.max(0.8, grid.cellSize * BLACK_HOLE_VISUAL.swirlWidthScale * (1 + layer * 0.18)) * glowScale;
+    context.beginPath();
+    context.arc(0, 0, arcRadius, -arcSpan, -0.1);
+    context.stroke();
+    context.restore();
+  }
+
+  for (let index = 0; index < particleCount; index += 1) {
+    const seed = blackHole.seed + index * 97;
+    const orbitBias = seededUnit(seed, 23);
+    const particleAngle = spin * (1.12 + orbitBias * 0.28) + index * 2.18 + (orbitBias - 0.5) * 0.8;
+    const particleRadius = swirlBaseRadius * (0.84 + orbitBias * 0.18);
+    const x = Math.cos(particleAngle) * particleRadius;
+    const y = Math.sin(particleAngle * 1.08 + orbitBias * 0.55) * particleRadius * 0.58;
+    const tailLength = grid.cellSize * BLACK_HOLE_VISUAL.particleTrailScale * (0.7 + orbitBias * 0.8);
+    const tailAngle = particleAngle + Math.PI * (0.52 + orbitBias * 0.12);
+    const dotRadius = Math.max(0.8, grid.cellSize * (BLACK_HOLE_VISUAL.particleRadiusScale + orbitBias * 0.008));
+    const dotColor = index === 0 ? "rgba(255, 255, 255, 0.92)" : "rgba(219, 255, 82, 0.88)";
+
+    context.globalAlpha = visibility * BLACK_HOLE_VISUAL.particleAlpha * (0.84 + orbitBias * 0.16) * motionScale;
+    context.shadowColor = index === 0 ? "#00f5ff" : "#dbff52";
+    context.shadowBlur = 7 * glowScale;
+    context.fillStyle = dotColor;
+    context.beginPath();
+    context.arc(x, y, dotRadius, 0, TAU);
+    context.fill();
+
+    context.globalAlpha = visibility * 0.26 * motionScale;
+    context.strokeStyle = "rgba(255, 255, 255, 0.26)";
+    context.lineWidth = Math.max(0.8, grid.cellSize * 0.015);
+    context.beginPath();
+    context.moveTo(x, y);
+    context.lineTo(x - Math.cos(tailAngle) * tailLength, y - Math.sin(tailAngle) * tailLength * 0.72);
+    context.stroke();
+  }
+
+  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = visibility * (active ? 1 : 0.95);
+  const coreGlow = context.createRadialGradient(0, 0, 0, 0, 0, nodeRadius * BLACK_HOLE_VISUAL.coreNodeGlowScale / BLACK_HOLE_VISUAL.coreNodeRadiusScale);
+  coreGlow.addColorStop(0, "rgba(255, 255, 255, 0.92)");
+  coreGlow.addColorStop(0.24, "rgba(219, 255, 82, 0.34)");
+  coreGlow.addColorStop(0.52, "rgba(0, 245, 255, 0.16)");
+  coreGlow.addColorStop(0.78, "rgba(0, 0, 0, 0.26)");
+  coreGlow.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = coreGlow;
+  context.beginPath();
+  context.arc(0, 0, nodeRadius * 2.4, 0, TAU);
+  context.fill();
+
   context.fillStyle = "rgba(1, 2, 6, 0.99)";
   context.beginPath();
-  context.arc(0, 0, coreRadius, 0, Math.PI * 2);
+  context.arc(0, 0, coreRadius, 0, TAU);
   context.fill();
 
-  context.globalAlpha = active ? 0.34 : preview * 0.22;
-  context.shadowColor = active ? "#dbff52" : "#ff2bd6";
-  context.shadowBlur = 2 * activeRenderQuality.glowScale;
-  context.fillStyle = active ? "rgba(143, 251, 255, 0.56)" : "rgba(255, 43, 214, 0.5)";
+  context.strokeStyle = active ? "rgba(255, 255, 255, 0.12)" : "rgba(255, 255, 255, 0.08)";
+  context.lineWidth = Math.max(1, grid.cellSize * 0.03);
   context.beginPath();
-  context.arc(coreRadius * 0.42, -coreRadius * 0.18, Math.max(1.05, grid.cellSize * 0.034), 0, Math.PI * 2);
+  context.arc(0, 0, coreRadius, 0, TAU);
+  context.stroke();
+
+  context.globalCompositeOperation = "lighter";
+  context.globalAlpha = visibility * 0.28 * motionScale;
+  context.shadowColor = "#ffffff";
+  context.shadowBlur = 8 * glowScale;
+  context.fillStyle = active ? "rgba(247, 251, 255, 0.92)" : "rgba(219, 255, 82, 0.8)";
+  context.beginPath();
+  context.arc(-nodeRadius * 0.18, -nodeRadius * 0.16, nodeRadius, 0, TAU);
   context.fill();
+  context.restore();
 
   context.restore();
 }
@@ -1892,11 +2263,18 @@ function drawBlackHoleAlert(
   context.globalAlpha = alpha;
   context.shadowColor = "#ff2bd6";
   context.shadowBlur = (12 + pulse * 6) * activeRenderQuality.glowScale;
-  context.fillStyle = "rgba(7, 10, 18, 0.68)";
+  context.fillStyle = "rgba(7, 10, 18, 0.72)";
   fillRoundedRect(context, bannerX, bannerY, bannerWidth, bannerHeight, bannerHeight * 0.5);
 
-  context.strokeStyle = "rgba(255, 43, 214, 0.42)";
-  context.lineWidth = 1.5;
+  const sheen = context.createLinearGradient(bannerX, bannerY, bannerX + bannerWidth, bannerY + bannerHeight);
+  sheen.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+  sheen.addColorStop(0.45, "rgba(0, 245, 255, 0.03)");
+  sheen.addColorStop(1, "rgba(255, 43, 214, 0.04)");
+  context.fillStyle = sheen;
+  fillRoundedRect(context, bannerX, bannerY, bannerWidth, bannerHeight, bannerHeight * 0.5);
+
+  context.strokeStyle = "rgba(255, 43, 214, 0.48)";
+  context.lineWidth = 1.4;
   context.beginPath();
   context.roundRect(bannerX + 0.75, bannerY + 0.75, bannerWidth - 1.5, bannerHeight - 1.5, bannerHeight * 0.5);
   context.stroke();
@@ -2024,9 +2402,18 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
         context.stroke();
       }
     } else {
-      context.fillStyle = speedMode === "base"
+      const baseColor = speedMode === "base"
         ? `hsl(${178 + age * 76} 100% ${scaleLightness(50 + age * 24, snakeBrightness)}%)`
         : speedTone.body;
+      const edgeColor = speedMode === "base"
+        ? `hsl(${194 + age * 58} 100% ${scaleLightness(64 + age * 12, snakeBrightness)}%)`
+        : speedTone.text;
+      const bodyFill = context.createLinearGradient(x, y, x + segmentSize, y + segmentSize);
+
+      bodyFill.addColorStop(0, "rgba(255, 255, 255, 0.08)");
+      bodyFill.addColorStop(0.4, baseColor);
+      bodyFill.addColorStop(1, edgeColor);
+      context.fillStyle = bodyFill;
       fillRoundedRect(context, x, y, segmentSize, segmentSize, 7);
 
       context.globalAlpha = isGameOver ? 0.24 : 0.34 + age * 0.22 + cueVisualStrength * 0.05;
@@ -2086,9 +2473,10 @@ function drawRewardBursts(context: CanvasRenderingContext2D, rewardBursts: reado
         flashRadius,
       );
 
-      flash.addColorStop(0, `rgba(255, 255, 255, ${0.9 * flashAlpha})`);
-      flash.addColorStop(0.24, `rgba(219, 255, 82, ${0.72 * flashAlpha})`);
-      flash.addColorStop(0.58, `rgba(0, 245, 255, ${0.28 * flashAlpha})`);
+      flash.addColorStop(0, `rgba(255, 255, 255, ${0.94 * flashAlpha})`);
+      flash.addColorStop(0.2, `rgba(219, 255, 82, ${0.72 * flashAlpha})`);
+      flash.addColorStop(0.48, `rgba(0, 245, 255, ${0.28 * flashAlpha})`);
+      flash.addColorStop(0.72, `rgba(255, 43, 214, ${0.08 * flashAlpha})`);
       flash.addColorStop(1, "rgba(0, 245, 255, 0)");
 
       context.globalAlpha = 1;
@@ -2295,6 +2683,53 @@ function drawBlackHoles(context: CanvasRenderingContext2D, snapshot: GameSnapsho
   context.restore();
 }
 
+function drawReviveCountdown(context: CanvasRenderingContext2D, snapshot: GameSnapshot, time: number): void {
+  if (snapshot.phase !== "reviving") {
+    return;
+  }
+
+  const { grid } = snapshot;
+  const countdown = Math.max(1, snapshot.reviveCountdownSeconds);
+  const width = grid.columns * grid.cellSize;
+  const height = grid.rows * grid.cellSize;
+  const centerX = grid.offsetX + width / 2;
+  const centerY = grid.offsetY + height / 2;
+  const radius = Math.max(42, Math.min(width, height) * 0.16);
+  const pulse = 0.5 + Math.sin(time * 7.2) * 0.5;
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+
+  context.fillStyle = "rgba(3, 4, 10, 0.14)";
+  context.beginPath();
+  context.arc(centerX, centerY, radius * 1.7, 0, Math.PI * 2);
+  context.fill();
+
+  context.strokeStyle = "rgba(0, 245, 255, 0.5)";
+  context.shadowColor = "#00f5ff";
+  context.shadowBlur = (18 + pulse * 10) * activeRenderQuality.glowScale;
+  context.lineWidth = Math.max(2, grid.cellSize * 0.08);
+  context.beginPath();
+  context.arc(centerX, centerY, radius * 1.7, 0, Math.PI * 2);
+  context.stroke();
+
+  context.fillStyle = "#f7fbff";
+  context.shadowColor = "#ff2bd6";
+  context.shadowBlur = (28 + pulse * 8) * activeRenderQuality.glowScale;
+  context.font = `900 ${Math.max(28, Math.min(108, radius * 1.82))}px system-ui, sans-serif`;
+  context.fillText(String(countdown), centerX, centerY - radius * 0.08);
+
+  context.fillStyle = "#dbff52";
+  context.shadowColor = "#dbff52";
+  context.shadowBlur = (12 + pulse * 6) * activeRenderQuality.glowScale;
+  context.font = `800 ${Math.max(11, Math.min(22, radius * 0.26))}px system-ui, sans-serif`;
+  context.fillText("复活中", centerX, centerY + radius * 0.88);
+
+  context.restore();
+}
+
 export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const context = canvas.getContext("2d", { alpha: false });
 
@@ -2303,6 +2738,8 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   }
 
   const stars = createStars();
+  const backgroundNebulae = createNebulaPatches();
+  const backgroundDust = createBackgroundDust();
   const state = createRenderState();
   const backgroundLayer = document.createElement("canvas");
   const backgroundLayerContext = backgroundLayer.getContext("2d", { alpha: false });
@@ -2363,7 +2800,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   const rebuildBackgroundLayer = (): void => {
     backgroundLayerContext.clearRect(0, 0, size.width, size.height);
-    drawBackground(backgroundLayerContext, size, 0);
+    drawBackground(backgroundLayerContext, size, 0, backgroundNebulae, backgroundDust);
   };
 
   const rebuildBoardLayer = (grid: GridMetrics): void => {
@@ -2501,6 +2938,10 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       context.restore();
 
       drawParticles(context, state.particles);
+      context.save();
+      context.translate(shakeOffset.x, shakeOffset.y);
+      drawReviveCountdown(context, frame.snapshot, time);
+      context.restore();
     },
 
     getSize(): CanvasSize {
@@ -2535,13 +2976,17 @@ function createStaticSceneSnapshot(grid: GridMetrics): GameSnapshot {
     blackHoles: [],
     blackHoleAlert: null,
     blackHoleCue: null,
+    rewardBurstOrigin: null,
     score: 0,
     highScore: 0,
+    livesRemaining: 3,
+    deathReason: null,
     direction: "right",
     speedMode: "base",
     speedMultiplier: 1,
     speedCue: null,
     wallGrace: null,
+    reviveCountdownSeconds: 0,
   };
 }
 
@@ -2560,6 +3005,15 @@ function drawAmbientPulse(context: CanvasRenderingContext2D, size: CanvasSize, t
   wash.addColorStop(0.4, "rgba(0, 245, 255, 0.03)");
   wash.addColorStop(1, "rgba(255, 43, 214, 0)");
   context.fillStyle = wash;
+  context.fillRect(0, 0, size.width, size.height);
+
+  const secondary = context.createRadialGradient(centerX, centerY, radius * 0.08, centerX, centerY, radius * 0.78);
+  secondary.addColorStop(0, "rgba(255, 255, 255, 0.05)");
+  secondary.addColorStop(0.35, "rgba(0, 245, 255, 0.03)");
+  secondary.addColorStop(0.72, "rgba(255, 43, 214, 0.015)");
+  secondary.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.globalAlpha = (0.045 + pulse * 0.018) * activeRenderQuality.ambientAlpha;
+  context.fillStyle = secondary;
   context.fillRect(0, 0, size.width, size.height);
 
   context.restore();

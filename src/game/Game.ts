@@ -1,11 +1,11 @@
 import { createAudioController, type AudioController } from "./audio";
 import {
   getBlackHoleFoodAvoidRadiusCells,
-  getBlackHoleKindForSpawn,
   getDesiredBlackHoleCount,
   isBlackHoleCollision,
   resolveBlackHoleAlert,
   resolveBlackHoleMovement,
+  chooseBlackHoleSpawnKind,
   spawnBlackHole,
   type BlackHoleGravityState,
 } from "./blackHole";
@@ -18,7 +18,8 @@ import {
   type GameProgress,
   type UnlockedFeatures,
 } from "./progression";
-import { findSafeSpawnPosition } from "./spawn";
+import { findReviveSpawnPlacement, findSafeSpawnPosition } from "./spawn";
+import type { ReviveSpawnPlacement } from "./spawn";
 import {
   STAR_BEAST_CONFIG,
   buildStarBeastDropCores,
@@ -56,6 +57,7 @@ import type {
   StarBeastEffect,
   StarBeastDeathCause,
   StarCore,
+  DeathReason,
   Unsubscribe,
 } from "./types";
 
@@ -67,9 +69,11 @@ interface GameOptions {
 }
 
 const PHASE_LABELS: Record<GamePhase, string> = {
-  ready: "准备",
-  playing: "进行中",
-  paused: "暂停",
+  ready: "待机",
+  playing: "运行中",
+  revivePrompt: "待复活",
+  reviving: "复活中",
+  paused: "已暂停",
   gameOver: "结束",
 };
 
@@ -87,9 +91,10 @@ const OPPOSITE_DIRECTIONS: Record<Direction, Direction> = {
   left: "right",
 };
 
-const BASE_STEP_MS = 180;
+const BASE_STEP_MS = 180 / 0.7 / 0.7;
+const BEAST_BASE_STEP_MS = BASE_STEP_MS;
 const BOOST_STEP_RATIO = 0.6;
-const ACCELERATE_SPEED_MULTIPLIER = 2;
+const ACCELERATE_SPEED_MULTIPLIER = 2.6 / 0.7 / 0.7;
 const BRAKE_SPEED_MULTIPLIER = 0.35;
 const SPEED_CUE_DURATION_MS = 1500;
 const HUD_TICKER_LINES = [
@@ -110,6 +115,8 @@ const FOOD_WAVE_BAG_CLUSTER_COUNT = 3;
 const FOOD_CLUSTER_MIN_COUNT = 3;
 const FOOD_CLUSTER_MAX_COUNT = 5;
 const FOOD_CLUSTER_RADIUS = 2;
+const DEFAULT_LIVES = 3;
+const REVIVE_COUNTDOWN_MS = 3000;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
 const MIN_ROWS = 10;
@@ -119,6 +126,14 @@ const COMPACT_LANDSCAPE_TOP_MARGIN = 170;
 const SHORT_SCREEN_TOP_MARGIN = 112;
 const DEFAULT_HUD_GAP = 12;
 const COMPACT_LANDSCAPE_HUD_GAP = 10;
+
+const DEATH_REASON_LABELS: Record<DeathReason, string> = {
+  wall: "撞到墙壁了",
+  snake_body: "撞到蛇身体了",
+  black_hole: "被黑洞吸入了",
+  star_beast: "被星兽撞到了",
+  unknown: "意外死亡",
+};
 
 type FoodWaveKind = "single" | "cluster";
 
@@ -235,6 +250,10 @@ function pickWeightedGridCell(cells: readonly WeightedGridCell[], random: () => 
   return cells[cells.length - 1]?.cell ?? null;
 }
 
+function rollDuration(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
 interface ActiveDirectionalInput {
   action: Direction;
   source: InputSource;
@@ -289,12 +308,17 @@ export class Game {
   private blackHoleGravityState: BlackHoleGravityState = { key: null, charge: 0 };
   private blackHoleCue: GameSnapshot["blackHoleCue"] = null;
   private blackHoleRecoveryDirection: Direction | null = null;
+  private livesRemaining = DEFAULT_LIVES;
+  private deathReason: DeathReason | null = null;
+  private reviving = false;
+  private reviveEndsAt = 0;
   private wallGrace: WallGraceState | null = null;
   private birthCell: GridCell = { column: 0, row: 0 };
   private direction: Direction = "right";
   private directionQueue: Direction[] = [];
   private score = 0;
   private coresEaten = 0;
+  private rewardBurstOrigin: GridCell | null = null;
   private highScore: number;
   private frameId: number | null = null;
   private elapsed = 0;
@@ -397,7 +421,7 @@ export class Game {
               break;
             }
 
-            this.advanceSnake(stepMs);
+            this.advanceSnake();
             this.stepAccumulator -= stepMs;
 
             if (this.phase !== "playing" || this.wallGrace) {
@@ -413,6 +437,8 @@ export class Game {
           this.updateTransientEntities(delta);
         }
       }
+    } else if (this.phase === "reviving") {
+      this.updateReviveState();
     }
 
     this.renderer.recordFrameTime(frameDelta);
@@ -436,7 +462,7 @@ export class Game {
     const size = this.renderer.resize();
     this.grid = this.buildGrid(size);
 
-    if (!this.isCurrentPlacementValid()) {
+    if ((this.phase === "playing" || this.phase === "paused" || this.phase === "ready") && !this.isCurrentPlacementValid()) {
       this.resetRun(this.phase === "paused" ? "paused" : this.phase);
     }
 
@@ -476,7 +502,11 @@ export class Game {
     }
 
     if (command.action === "start") {
-      this.beginRun();
+      if (this.phase === "revivePrompt") {
+        this.confirmRevive();
+      } else {
+        this.beginRun();
+      }
       return;
     }
 
@@ -492,6 +522,12 @@ export class Game {
 
   private readonly handleStartPointer = (event: PointerEvent): void => {
     event.preventDefault();
+
+    if (this.phase === "revivePrompt") {
+      this.confirmRevive();
+      return;
+    }
+
     this.beginRun();
   };
 
@@ -631,29 +667,25 @@ export class Game {
       return this.getMovementSpeedStateFromMode("boost");
     }
 
-    const candidates: Array<{ mode: SpeedCueMode; order: number }> = [];
+    const activeSpeedInput = this.getActiveSpeedInput();
+
+    if (activeSpeedInput) {
+      return this.getMovementSpeedStateFromMode(activeSpeedInput.mode);
+    }
+
     const activeDirectionalInput = this.getActiveDirectionalInput();
 
     if (activeDirectionalInput) {
       if (activeDirectionalInput.action === this.direction) {
-        candidates.push({ mode: "accelerate", order: activeDirectionalInput.order });
-      } else if (activeDirectionalInput.action === OPPOSITE_DIRECTIONS[this.direction]) {
-        candidates.push({ mode: "brake", order: activeDirectionalInput.order });
+        return this.getMovementSpeedStateFromMode("accelerate");
+      }
+
+      if (activeDirectionalInput.action === OPPOSITE_DIRECTIONS[this.direction]) {
+        return this.getMovementSpeedStateFromMode("brake");
       }
     }
 
-    const activeSpeedInput = this.getActiveSpeedInput();
-
-    if (activeSpeedInput) {
-      candidates.push({ mode: activeSpeedInput.mode, order: activeSpeedInput.order });
-    }
-
-    const latestCandidate = candidates.reduce<{ mode: SpeedCueMode; order: number } | null>(
-      (latest, candidate) => (!latest || candidate.order > latest.order ? candidate : latest),
-      null,
-    );
-
-    return latestCandidate ? this.getMovementSpeedStateFromMode(latestCandidate.mode) : { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
+    return { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
   }
 
   private updateSpeedCueState(movementSpeed: MovementSpeedState): void {
@@ -760,7 +792,12 @@ export class Game {
     this.blackHoleAlert = null;
     this.blackHoleCue = null;
     this.blackHoleRecoveryDirection = null;
+    this.livesRemaining = DEFAULT_LIVES;
+    this.deathReason = null;
+    this.reviving = false;
+    this.reviveEndsAt = 0;
     this.wallGrace = null;
+    this.rewardBurstOrigin = null;
     this.snake = this.createStartingSnake();
     this.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
     this.starAttractors = [];
@@ -771,6 +808,145 @@ export class Game {
     this.blackHoles = [];
     this.foods = this.createFoods();
     this.syncUi(true);
+  }
+
+  private handlePlayerDeath(reason: DeathReason): void {
+    if (this.phase === "gameOver") {
+      return;
+    }
+
+    this.deathReason = reason;
+
+    if (this.livesRemaining > 1) {
+      this.livesRemaining -= 1;
+      this.enterRevivePrompt();
+      return;
+    }
+
+    this.livesRemaining = 0;
+    this.finishGameOver(reason);
+  }
+
+  private enterRevivePrompt(): void {
+    this.phase = "revivePrompt";
+    this.reviving = false;
+    this.reviveEndsAt = 0;
+    this.resetTransientRunState();
+    this.syncUi(true);
+  }
+
+  private confirmRevive(): void {
+    if (this.phase !== "revivePrompt" || this.livesRemaining <= 0) {
+      return;
+    }
+
+    this.audio.unlock();
+    this.audio.playUiPulse();
+
+    const placement = findReviveSpawnPlacement(this.grid, {
+      length: this.snake.length,
+      occupiedCells: this.getReviveBlockedCells(),
+      dangerZones: this.blackHoles.map((blackHole) => ({
+        center: blackHole.cell,
+        radius: getBlackHoleFoodAvoidRadiusCells(blackHole),
+      })),
+      wallPadding: 1,
+      random: Math.random,
+    });
+
+    if (!placement) {
+      this.livesRemaining = 0;
+      this.finishGameOver(this.deathReason ?? "unknown");
+      return;
+    }
+
+    this.applyRevivePlacement(placement);
+    this.phase = "reviving";
+    this.reviving = true;
+    this.reviveEndsAt = this.elapsed + REVIVE_COUNTDOWN_MS;
+    this.syncUi(true);
+  }
+
+  private applyRevivePlacement(placement: ReviveSpawnPlacement): void {
+    this.snake = placement.cells;
+    this.birthCell = this.snake[0] ? { ...this.snake[0] } : this.birthCell;
+    this.direction = placement.direction;
+    this.resetTransientRunState();
+  }
+
+  private resetTransientRunState(): void {
+    this.isBoosting = false;
+    this.stepAccumulator = 0;
+    this.blackHoleRecoveryDirection = null;
+    this.blackHoleGravityState = { key: null, charge: 0 };
+    this.blackHoleAlert = null;
+    this.blackHoleCue = null;
+    this.wallGrace = null;
+    this.speedCue = null;
+    this.lastMovementSpeedMode = "base";
+    this.directionQueue = [];
+    this.activeDirectionalInputs.clear();
+    this.activeSpeedInputs.clear();
+  }
+
+  private updateReviveState(): void {
+    if (!this.reviving || this.phase !== "reviving") {
+      return;
+    }
+
+    if (this.elapsed < this.reviveEndsAt) {
+      return;
+    }
+
+    this.completeRevive();
+  }
+
+  private completeRevive(): void {
+    if (!this.reviving || this.phase !== "reviving") {
+      return;
+    }
+
+    this.reviving = false;
+    this.reviveEndsAt = 0;
+    this.phase = "playing";
+    this.syncUi(true);
+  }
+
+  private finishGameOver(reason: DeathReason | null = null): void {
+    this.phase = "gameOver";
+    this.reviving = false;
+    this.reviveEndsAt = 0;
+    this.resetTransientRunState();
+    this.deathReason = reason;
+    this.saveHighScoreIfNeeded();
+    this.syncUi(true);
+  }
+
+  private getReviveBlockedCells(): GridCell[] {
+    return [
+      ...this.snake,
+      ...this.foods,
+      ...(STAR_ATTRACTOR_ENABLED ? this.starAttractors.map((attractor) => attractor.cell) : []),
+      ...this.starBeasts.flatMap((beast) => beast.body),
+      ...this.starCores.map((core) => ({ column: Math.floor(core.x), row: Math.floor(core.y) })),
+      ...this.blackHoles.map((blackHole) => blackHole.cell),
+    ];
+  }
+
+  private getDeathReasonText(reason: DeathReason | null = this.deathReason): string {
+    if (reason) {
+      return DEATH_REASON_LABELS[reason];
+    }
+
+    return "本局已结束";
+  }
+
+  private getReviveCountdownSeconds(): number {
+    if (!this.reviving) {
+      return 0;
+    }
+
+    return Math.max(1, Math.ceil((this.reviveEndsAt - this.elapsed) / 1000));
   }
 
   private createStartingSnake(): GridCell[] {
@@ -1086,11 +1262,11 @@ export class Game {
     return scored.map((entry) => entry.cell);
   }
 
-  private advanceSnake(stepMs: number): void {
+  private advanceSnake(): void {
     const head = this.snake[0];
 
     if (!head) {
-      this.endRun();
+      this.finishGameOver("unknown");
       return;
     }
 
@@ -1102,7 +1278,7 @@ export class Game {
       this.blackHoleGravityState = { key: null, charge: 0 };
       this.blackHoleCue = null;
       this.direction = recoveryDirection;
-      this.commitSnakeStep(stepMs);
+      this.commitSnakeStep();
       return;
     }
 
@@ -1112,14 +1288,14 @@ export class Game {
       this.directionQueue.shift();
     }
 
-    this.advanceSnakeFromDirection(intendedDirection, stepMs);
+    this.advanceSnakeFromDirection(intendedDirection);
   }
 
-  private advanceSnakeFromDirection(intendedDirection: Direction, stepMs: number): void {
+  private advanceSnakeFromDirection(intendedDirection: Direction): void {
     const head = this.snake[0];
 
     if (!head) {
-      this.endRun();
+      this.finishGameOver("unknown");
       return;
     }
 
@@ -1139,7 +1315,7 @@ export class Game {
 
     if (resolution.shouldDie) {
       this.direction = resolution.finalDirection;
-      this.endRun();
+      this.handlePlayerDeath("black_hole");
       return;
     }
 
@@ -1149,14 +1325,14 @@ export class Game {
       this.blackHoleRecoveryDirection = intendedDirection;
     }
 
-    this.commitSnakeStep(stepMs);
+    this.commitSnakeStep();
   }
 
-  private commitSnakeStep(stepMs: number): void {
+  private commitSnakeStep(): void {
     const head = this.snake[0];
 
     if (!head) {
-      this.endRun();
+      this.finishGameOver("unknown");
       return;
     }
 
@@ -1181,12 +1357,17 @@ export class Game {
     }
 
     if (this.collidesWithSelf(nextHead, shouldKeepTail)) {
-      this.endRun();
+      this.handlePlayerDeath("snake_body");
       return;
     }
 
     if (this.collidesWithBlackHole(nextHead)) {
-      this.endRun();
+      this.handlePlayerDeath("black_hole");
+      return;
+    }
+
+    if (this.collidesWithStarBeast(nextHead)) {
+      this.handlePlayerDeath("star_beast");
       return;
     }
 
@@ -1194,10 +1375,10 @@ export class Game {
 
     if (ateFood) {
       this.foods.splice(ateFoodIndex, 1);
-      this.handleCoreCollection(currentTime, 1, true);
+      this.handleCoreCollection(currentTime, 1, true, nextHead);
     } else if (ateStarCore) {
       this.starCores.splice(starCoreIndex, 1);
-      this.handleCoreCollection(currentTime, 1, false);
+      this.handleCoreCollection(currentTime, 1, false, nextHead);
     } else if (ateStarAttractor) {
       this.starAttractors.splice(starAttractorIndex, 1);
       this.absorbStarAttractor(nextHead, currentTime);
@@ -1214,15 +1395,20 @@ export class Game {
     if (STAR_ATTRACTOR_ENABLED) {
       this.retryPendingStarAttractorSpawn(currentTime);
     }
-    this.updateStarBeasts(stepMs);
     this.updateBlackHoleAlert(currentTime);
   }
 
-  private handleCoreCollection(currentTime: number, amount: number, advancesStarAttractorProgress: boolean): void {
+  private handleCoreCollection(
+    currentTime: number,
+    amount: number,
+    advancesStarAttractorProgress: boolean,
+    rewardBurstOrigin: GridCell | null,
+  ): void {
     if (amount <= 0) {
       return;
     }
 
+    this.rewardBurstOrigin = rewardBurstOrigin ? { ...rewardBurstOrigin } : null;
     this.coresEaten += amount;
     this.score += SCORE_PER_CORE * amount;
     this.saveHighScoreIfNeeded();
@@ -1334,7 +1520,7 @@ export class Game {
 
     if (absorbCount > 0) {
       this.pendingGrowthSegments += absorbCount;
-      this.handleCoreCollection(currentTime, absorbCount, false);
+      this.handleCoreCollection(currentTime, absorbCount, false, attractorCell);
     } else {
       this.saveHighScoreIfNeeded();
       this.refreshBlackHoles();
@@ -1361,8 +1547,14 @@ export class Game {
     const starBeastBodies = this.starBeasts.flatMap((beast) => beast.body);
     const starAttractorCells = STAR_ATTRACTOR_ENABLED ? this.starAttractors.map((attractor) => attractor.cell) : [];
     const starCoreCells = this.starCores.map((core) => ({ column: Math.floor(core.x), row: Math.floor(core.y) }));
+    const random = Math.random;
 
     while (this.blackHoles.length < desiredCount) {
+      const nextKind = chooseBlackHoleSpawnKind(
+        this.blackHoles.map((blackHole) => blackHole.kind),
+        desiredCount,
+        random,
+      );
       const nextBlackHole = spawnBlackHole({
         grid: this.grid,
         progress: this.getProgress(),
@@ -1376,7 +1568,8 @@ export class Game {
           center: beast.body[0] ?? this.birthCell,
           radius: Math.max(3, Math.ceil(beast.length * 0.45)),
         })),
-        kind: getBlackHoleKindForSpawn(this.getProgress(), this.grid),
+        kind: nextKind,
+        random,
       });
 
       if (!nextBlackHole) {
@@ -1452,6 +1645,7 @@ export class Game {
     }
 
     this.updateStarBeastEffects(currentTime);
+    this.updateStarBeasts(delta);
     this.refreshStarBeasts();
   }
 
@@ -1477,6 +1671,9 @@ export class Game {
       }
 
       const ageMs = currentTime * 1000 - core.spawnTime * 1000;
+      const rewardBurstOrigin = core.burstOrigin
+        ? (head ? { ...head } : null)
+        : { column: Math.floor(core.x), row: Math.floor(core.y) };
 
       if (ageMs >= core.lifetimeMs) {
         this.starCores.splice(index, 1);
@@ -1492,7 +1689,7 @@ export class Game {
         if (distance <= 0.36) {
           this.starCores.splice(index, 1);
           this.extendSnakeByOne();
-          this.handleCoreCollection(currentTime, 1, false);
+          this.handleCoreCollection(currentTime, 1, false, rewardBurstOrigin);
 
           if (this.foods.length === 0 && this.starCores.length === 0) {
             this.endRun();
@@ -1537,7 +1734,7 @@ export class Game {
 
         if (distance <= 0.36) {
           this.starCores.splice(index, 1);
-          this.handleCoreCollection(currentTime, 1, false);
+          this.handleCoreCollection(currentTime, 1, false, rewardBurstOrigin);
 
           if (this.foods.length === 0 && this.starCores.length === 0) {
             this.endRun();
@@ -1568,6 +1765,30 @@ export class Game {
     );
   }
 
+  private primeStarBeastBehavior(beast: StarBeast, currentTime: number): void {
+    if (currentTime >= beast.nextCoreHuntAt && currentTime >= beast.coreHuntUntil) {
+      beast.coreHuntUntil = currentTime + rollDuration(
+        STAR_BEAST_CONFIG.coreHuntWindowRangeMs[0],
+        STAR_BEAST_CONFIG.coreHuntWindowRangeMs[1],
+      ) / 1000;
+      beast.nextCoreHuntAt = currentTime + rollDuration(
+        STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[0],
+        STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[1],
+      ) / 1000;
+    }
+
+    if (currentTime >= beast.nextAttackAt && currentTime >= beast.attackUntil) {
+      beast.attackUntil = currentTime + rollDuration(
+        STAR_BEAST_CONFIG.attackWindowRangeMs[0],
+        STAR_BEAST_CONFIG.attackWindowRangeMs[1],
+      ) / 1000;
+      beast.nextAttackAt = currentTime + rollDuration(
+        STAR_BEAST_CONFIG.attackCooldownRangeMs[0],
+        STAR_BEAST_CONFIG.attackCooldownRangeMs[1],
+      ) / 1000;
+    }
+  }
+
   private getStarCoreCells(): GridCell[] {
     return this.starCores.map((core) => ({
       column: Math.floor(core.x),
@@ -1587,13 +1808,32 @@ export class Game {
     return this.snake.slice(1).some((segment) => cellsMatch(segment, cell));
   }
 
-  private findStarCoreIndex(cell: GridCell): number {
+  private consumeStarCore(beast: StarBeast, starCoreIndex: number, currentTime: number): void {
+    this.starCores.splice(starCoreIndex, 1);
+    beast.coreHuntUntil = currentTime;
+    beast.nextCoreHuntAt = currentTime + rollDuration(
+      STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[0],
+      STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[1],
+    ) / 1000;
+    beast.aiDecisionCooldown = 0;
+  }
+
+  private findStarCoreIndex(cell: GridCell, radius = 0): number {
     return this.starCores.findIndex((core) => {
       const coreCell = { column: Math.floor(core.x), row: Math.floor(core.y) };
+
+      if (radius > 0) {
+        return Math.abs(coreCell.column - cell.column) <= radius && Math.abs(coreCell.row - cell.row) <= radius;
+      }
+
       const distance = Math.hypot(core.x - (cell.column + 0.5), core.y - (cell.row + 0.5));
 
       return cellsMatch(coreCell, cell) || distance <= 0.42;
     });
+  }
+
+  private collidesWithStarBeast(cell: GridCell): boolean {
+    return this.starBeasts.some((beast) => beast.alive && beast.body.some((segment) => cellsMatch(segment, cell)));
   }
 
   private killStarBeast(beast: StarBeast, cause: StarBeastDeathCause, currentTime: number): void {
@@ -1649,10 +1889,8 @@ export class Game {
     }
 
     const playerBody = this.snake.slice(1);
-    const blockedCells = [
-      ...this.foods,
-      ...this.getStarCoreCells(),
-    ];
+    const blockedCells = [...this.foods];
+    const playerDirection = this.direction;
     const beastsToUpdate = [...this.starBeasts];
 
     for (const beast of beastsToUpdate) {
@@ -1664,24 +1902,37 @@ export class Game {
         continue;
       }
 
-      this.advanceStarBeast(beast, stepMs, currentTime, playerHead, playerBody, blockedCells);
+      this.advanceStarBeast(
+        beast,
+        stepMs,
+        currentTime,
+        playerHead,
+        playerBody,
+        blockedCells,
+        this.getStarCoreCells(),
+        playerDirection,
+      );
     }
   }
 
   private advanceStarBeast(
     beast: StarBeast,
-    stepMs: number,
+    deltaMs: number,
     currentTime: number,
     playerHead: GridCell,
     playerBody: readonly GridCell[],
     blockedCells: readonly GridCell[],
+    starCoreCells: readonly GridCell[],
+    playerDirection: Direction,
   ): void {
     if (!beast.alive || beast.body.length === 0) {
       return;
     }
 
+    let visibleStarCoreCells = starCoreCells;
+
     if (beast.state === "spawning") {
-      beast.spawnGraceTime = Math.max(0, beast.spawnGraceTime - stepMs);
+      beast.spawnGraceTime = Math.max(0, beast.spawnGraceTime - deltaMs);
 
       if (beast.spawnGraceTime > 0) {
         return;
@@ -1691,8 +1942,10 @@ export class Game {
       beast.aiDecisionCooldown = 0;
     }
 
-    beast.moveTimer += stepMs;
-    const moveInterval = Math.max(90, stepMs / Math.max(0.55, beast.speedFactor));
+    this.primeStarBeastBehavior(beast, currentTime);
+
+    beast.moveTimer += deltaMs;
+    const moveInterval = Math.max(90, BEAST_BASE_STEP_MS / Math.max(0.55, beast.speedFactor));
 
     while (beast.moveTimer >= moveInterval && beast.alive && this.phase === "playing") {
       const otherBeasts = this.starBeasts.filter((candidate) => candidate.id !== beast.id && candidate.alive);
@@ -1700,8 +1953,10 @@ export class Game {
       const moveContext: StarBeastMoveContext = {
         grid: this.grid,
         playerHead,
+        playerDirection,
         playerBody,
         blockedCells,
+        starCoreCells: visibleStarCoreCells,
         otherStarBeasts: otherBeasts,
         blackHoles: this.blackHoles,
         currentTime,
@@ -1744,7 +1999,7 @@ export class Game {
       }
 
       if (cellsMatch(nextHead, playerHead)) {
-        this.endRun();
+        this.handlePlayerDeath("star_beast");
         return;
       }
 
@@ -1758,7 +2013,39 @@ export class Game {
         break;
       }
 
-      beast.body = [nextHead, ...beast.body.slice(0, beast.body.length - 1)];
+      let growth = 0;
+      const ateStarCoreIndex = this.findStarCoreIndex(nextHead);
+
+      if (ateStarCoreIndex !== -1) {
+        this.consumeStarCore(beast, ateStarCoreIndex, currentTime);
+        growth += 1;
+        visibleStarCoreCells = this.getStarCoreCells();
+      }
+
+      beast.coreScanStepCount += 1;
+
+      if (beast.coreScanStepCount >= 2) {
+        beast.coreScanStepCount = 0;
+
+        const nearbyStarCoreIndex = this.findStarCoreIndex(head, 1);
+
+        if (nearbyStarCoreIndex !== -1) {
+          this.consumeStarCore(beast, nearbyStarCoreIndex, currentTime);
+          growth += 1;
+          visibleStarCoreCells = this.getStarCoreCells();
+        }
+      }
+
+      const nextLength = Math.min(STAR_BEAST_CONFIG.maxLength, beast.length + growth);
+
+      beast.body = [nextHead, ...beast.body];
+
+      while (beast.body.length > nextLength) {
+        beast.body.pop();
+      }
+
+      beast.length = nextLength;
+
       beast.moveTimer = Math.max(0, beast.moveTimer - moveInterval);
       beast.aiDecisionCooldown = Math.max(0, beast.aiDecisionCooldown - 1);
       beast.state = this.getStarBeastState(playerHead, beast);
@@ -1816,7 +2103,7 @@ export class Game {
 
     if (!recoveryDirection) {
       if (this.elapsed >= this.wallGrace.expiresAt) {
-        this.endRun();
+        this.handlePlayerDeath("wall");
       }
 
       return;
@@ -1824,7 +2111,7 @@ export class Game {
 
     this.wallGrace = null;
     this.stepAccumulator = 0;
-    this.advanceSnakeFromDirection(recoveryDirection, 0);
+    this.advanceSnakeFromDirection(recoveryDirection);
   }
 
   private getWallGraceRecoveryDirection(): Direction | null {
@@ -1997,15 +2284,7 @@ export class Game {
   }
 
   private endRun(): void {
-    this.phase = "gameOver";
-    this.isBoosting = false;
-    this.stepAccumulator = 0;
-    this.blackHoleRecoveryDirection = null;
-    this.wallGrace = null;
-    this.speedCue = null;
-    this.lastMovementSpeedMode = "base";
-    this.saveHighScoreIfNeeded();
-    this.syncUi(true);
+    this.finishGameOver();
   }
 
   private saveHighScoreIfNeeded(): void {
@@ -2089,13 +2368,17 @@ export class Game {
       blackHoles: this.blackHoles,
       blackHoleAlert: this.blackHoleAlert,
       blackHoleCue: this.blackHoleCue,
+      rewardBurstOrigin: this.rewardBurstOrigin ? { ...this.rewardBurstOrigin } : null,
       score: this.score,
       highScore: this.highScore,
+      livesRemaining: this.livesRemaining,
+      deathReason: this.deathReason,
       direction: this.direction,
       speedMode: movementSpeed.mode,
       speedMultiplier: movementSpeed.multiplier,
       speedCue: this.getSpeedCueSnapshot(),
       wallGrace: this.wallGrace,
+      reviveCountdownSeconds: this.getReviveCountdownSeconds(),
     };
   }
 
@@ -2120,15 +2403,40 @@ export class Game {
     this.lastUiUpdate = this.elapsed;
     const size = measuredSize ?? this.renderer.getSize();
     const unlockCopy = getNextLengthUnlockCopy(this.getProgress());
+    const isReady = this.phase === "ready";
+    const isRevivePrompt = this.phase === "revivePrompt";
+    const isReviving = this.phase === "reviving";
+    const isGameOver = this.phase === "gameOver";
+    const currentLength = this.snake.length.toString();
+    const currentLengthDisplay = `${currentLength}/100`;
 
     this.ui.root.dataset.phase = this.phase;
-    this.ui.startPanel.hidden = this.phase !== "ready" && this.phase !== "gameOver";
-    this.ui.startButton.textContent = this.phase === "gameOver" ? "重开" : "开始";
-    this.ui.startButton.setAttribute("aria-label", this.phase === "gameOver" ? "重新开始" : "开始游戏");
-    this.ui.pauseButton.disabled = this.phase === "ready" || this.phase === "gameOver";
+    this.ui.root.style.setProperty("--board-top", `${this.grid.offsetY}px`);
+    this.ui.startPanel.hidden = !(isReady || isGameOver || isRevivePrompt);
+    this.ui.startButton.textContent = isReady ? "开始游戏" : isGameOver ? "重开" : "复活";
+    this.ui.startButton.setAttribute(
+      "aria-label",
+      isReady ? "开始游戏" : isGameOver ? "重新开始" : "确认复活",
+    );
+    this.ui.startButton.disabled = isReviving;
+    this.ui.pauseButton.disabled = this.phase !== "playing" && this.phase !== "paused";
     this.ui.pauseButton.textContent = this.phase === "paused" ? "▶" : "❚❚";
     this.ui.pauseButton.setAttribute("aria-label", this.phase === "paused" ? "继续游戏" : "暂停游戏");
-    this.ui.lengthLabel.textContent = this.snake.length.toString();
+    this.ui.panelPrimaryLabel.textContent = isReady ? "准备开始" : "当前/目标长度";
+    this.ui.panelPrimaryValue.textContent = isReady ? "NEON SERPENT" : currentLengthDisplay;
+    this.ui.panelSecondaryLabel.textContent = isReady ? "霓虹吞星" : this.getDeathReasonText();
+    this.ui.panelMetaLabel.hidden = isRevivePrompt;
+    this.ui.panelMetaLabel.textContent = isReady
+      ? "长按方向键加速·长按Shift减速"
+      : isGameOver
+        ? "按开始重开"
+        : isReviving
+          ? `${this.getReviveCountdownSeconds()} 秒后开始`
+          : "";
+    this.ui.lifeHearts.forEach((heart, index) => {
+      heart.dataset.active = index < this.livesRemaining ? "true" : "false";
+    });
+    this.ui.lengthLabel.textContent = currentLengthDisplay;
     this.ui.unlockTitleLabel.textContent = unlockCopy.title;
     this.ui.unlockValueLabel.textContent = unlockCopy.value;
     this.ui.stateLabel.textContent = PHASE_LABELS[this.phase];

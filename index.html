@@ -31,8 +31,8 @@
           </div>
 
           <div class="hud-cards" aria-label="当前信息">
-            <section class="hud-card hud-card--length" aria-label="当前长度">
-              <span class="hud-card__label">当前长度</span>
+            <section class="hud-card hud-card--length" aria-label="当前/目标长度">
+              <span class="hud-card__label">当前/目标长度</span>
               <strong id="length-label" class="hud-card__value">4</strong>
             </section>
 
@@ -56,15 +56,19 @@
           </div>
         </header>
 
+        <div class="hud-lives" aria-label="剩余生命">
+          <span id="life-heart-1" class="hud-life" data-active="true" aria-hidden="true">♥</span>
+          <span id="life-heart-2" class="hud-life" data-active="true" aria-hidden="true">♥</span>
+          <span id="life-heart-3" class="hud-life" data-active="true" aria-hidden="true">♥</span>
+        </div>
+
         <section id="start-panel" class="start-panel" aria-label="开始界面">
           <div class="start-orbit" aria-hidden="true"></div>
           <p class="panel-kicker">SERPENT CORE ONLINE</p>
-          <h1>NEON SERPENT</h1>
-          <p class="panel-subtitle">霓虹吞星</p>
-          <section class="operation-guide" aria-label="基础操作体验">
-            <div class="operation-note">加速：长按方向键</div>
-            <div class="operation-note">减速：长按 Shift</div>
-          </section>
+          <p id="panel-primary-label" class="panel-primary-label">准备开始</p>
+          <h1 id="panel-primary-value">NEON SERPENT</h1>
+          <p id="panel-secondary-label" class="panel-subtitle">霓虹吞星</p>
+          <p id="panel-meta-label" class="panel-meta">长按方向键加速·长按Shift减速</p>
           <button id="start-button" class="primary-action" type="button">开始游戏</button>
         </section>
 
