@@ -83,9 +83,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  min-height: 58px;
-  padding: 10px 12px;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background:
@@ -159,12 +159,15 @@ button {
 
 .status-cluster {
   gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
   justify-content: center;
 }
 
 .stat-chip {
-  min-width: 74px;
-  padding: 6px 8px;
+  min-width: 0;
+  flex: 1 1 0;
+  padding: 5px 7px;
   border: 1px solid rgba(143, 251, 255, 0.2);
   border-radius: 8px;
   background:
@@ -173,81 +176,6 @@ button {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.1),
     inset 0 0 16px rgba(0, 245, 255, 0.06);
-}
-
-.combo-chip {
-  display: grid;
-  gap: 4px;
-  min-width: 140px;
-  align-content: start;
-  transition:
-    border-color 180ms ease,
-    box-shadow 180ms ease,
-    background 180ms ease,
-    opacity 180ms ease;
-}
-
-.combo-chip strong {
-  margin-top: 0;
-}
-
-.combo-count,
-.combo-timer {
-  color: var(--muted);
-  font-size: 0.66rem;
-  line-height: 1;
-}
-
-.combo-meter {
-  position: relative;
-  display: block;
-  height: 5px;
-  overflow: hidden;
-  border: 1px solid rgba(143, 251, 255, 0.22);
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.26);
-}
-
-.combo-meter span {
-  display: block;
-  width: 0%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--magenta), var(--lime), var(--cyan));
-  box-shadow: 0 0 12px rgba(219, 255, 82, 0.38);
-  transition: width 120ms linear;
-}
-
-.combo-chip[data-unlocked="false"] {
-  opacity: 0.76;
-}
-
-.combo-chip[data-unlocked="false"] .combo-count,
-.combo-chip[data-unlocked="false"] .combo-meter,
-.combo-chip[data-unlocked="false"] .combo-timer {
-  display: none;
-}
-
-.combo-chip[data-unlocked="true"] {
-  border-color: rgba(219, 255, 82, 0.4);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.1),
-    inset 0 0 16px rgba(0, 245, 255, 0.08),
-    0 0 22px rgba(219, 255, 82, 0.22),
-    0 0 34px rgba(0, 245, 255, 0.1);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
-    linear-gradient(135deg, rgba(16, 28, 48, 0.92), rgba(6, 12, 24, 0.74));
-  animation: combo-glow 1.8s ease-in-out infinite;
-}
-
-.combo-chip[data-unlocked="true"] strong {
-  color: var(--lime);
-  text-shadow: 0 0 12px rgba(219, 255, 82, 0.72);
-}
-
-.combo-chip[data-unlocked="true"] .combo-meter {
-  border-color: rgba(219, 255, 82, 0.38);
 }
 
 .stat-chip span,
@@ -449,6 +377,59 @@ button {
   text-shadow: 0 0 14px rgba(0, 245, 255, 0.24);
 }
 
+.operation-guide {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 368px);
+  justify-self: stretch;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(143, 251, 255, 0.18);
+  text-align: left;
+}
+
+.operation-guide-title {
+  margin: 0 0 8px;
+  color: var(--lime);
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 0 12px rgba(219, 255, 82, 0.52);
+}
+
+.operation-row {
+  display: grid;
+  grid-template-columns: minmax(78px, 96px) 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.operation-row:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.operation-row strong {
+  color: var(--text);
+  font-size: 0.84rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.operation-row span,
+.operation-note {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.operation-note {
+  margin: 8px 0 0;
+}
+
 .diagnostic-strip {
   position: absolute;
   right: max(16px, env(safe-area-inset-right));
@@ -648,19 +629,6 @@ button {
   }
 }
 
-@keyframes combo-glow {
-  0%,
-  100% {
-    transform: translateY(0);
-    filter: brightness(1);
-  }
-
-  50% {
-    transform: translateY(-1px);
-    filter: brightness(1.08);
-  }
-}
-
 @media (max-width: 720px) {
   .hud-strip {
     align-items: stretch;
@@ -681,16 +649,6 @@ button {
     flex: 1;
   }
 
-  .combo-chip {
-    min-width: 0;
-    flex: 1.2;
-  }
-
-  .combo-count,
-  .combo-timer {
-    font-size: 0.6rem;
-  }
-
   .diagnostic-strip {
     left: max(16px, env(safe-area-inset-left));
     right: auto;
@@ -698,6 +656,10 @@ button {
 
   .start-panel h1 {
     font-size: 2.45rem;
+  }
+
+  .operation-guide {
+    width: min(100%, 332px);
   }
 }
 
@@ -735,14 +697,9 @@ button {
   }
 
   .stat-chip {
-    min-width: 58px;
+    min-width: 0;
+    flex: 1;
     padding: 5px 6px;
-  }
-
-  .combo-chip {
-    min-width: 84px;
-    padding: 5px 6px;
-    gap: 3px;
   }
 
   .stat-chip span {
@@ -752,11 +709,6 @@ button {
   .stat-chip strong {
     margin-top: 3px;
     font-size: 0.84rem;
-  }
-
-  .combo-count,
-  .combo-timer {
-    font-size: 0.52rem;
   }
 
   .icon-button {
@@ -782,6 +734,31 @@ button {
 
   .start-panel h1 {
     font-size: 2.1rem;
+  }
+
+  .operation-guide {
+    width: min(100%, 298px);
+    padding-top: 8px;
+  }
+
+  .operation-guide-title {
+    margin-bottom: 6px;
+    font-size: 0.7rem;
+  }
+
+  .operation-row {
+    gap: 8px;
+    padding: 5px 0;
+    grid-template-columns: minmax(70px, 82px) 1fr;
+  }
+
+  .operation-row strong {
+    font-size: 0.76rem;
+  }
+
+  .operation-row span,
+  .operation-note {
+    font-size: 0.63rem;
   }
 
   .primary-action {

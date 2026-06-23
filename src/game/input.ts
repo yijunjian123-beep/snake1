@@ -10,7 +10,9 @@ import type {
 
 const KEY_ACTIONS: ReadonlyMap<string, InputAction> = new Map([
   ["Enter", "start"],
-  ["Space", "boost"],
+  ["Space", "speed-accelerate"],
+  ["ShiftLeft", "speed-brake"],
+  ["ShiftRight", "speed-brake"],
   ["KeyP", "pause"],
   ["KeyR", "restart"],
   ["ArrowUp", "move-up"],
@@ -98,6 +100,7 @@ export function createInputController(options: InputControllerOptions = {}): Inp
   const controls = options.touchControls;
   const listeners = new Set<InputListener>();
   let activeJoystick: ActiveJoystick | null = null;
+  let activeJoystickAction: InputAction | null = null;
   let boostPointerId: number | null = null;
 
   const emit = (command: InputCommand): void => {
@@ -148,6 +151,12 @@ export function createInputController(options: InputControllerOptions = {}): Inp
     event.preventDefault();
     setJoystickVisuals(controls, deltaX, deltaY);
 
+    if (activeJoystickAction && activeJoystickAction !== action) {
+      emit({ action: activeJoystickAction, kind: "released", source: "pointer" });
+    }
+
+    activeJoystickAction = action;
+
     if (action) {
       emit({ action, kind: "pressed", source: "pointer" });
     }
@@ -172,6 +181,7 @@ export function createInputController(options: InputControllerOptions = {}): Inp
 
     event.preventDefault();
     controls.joystick.setPointerCapture(event.pointerId);
+    activeJoystickAction = null;
     updateJoystick(event);
   };
 
@@ -190,6 +200,12 @@ export function createInputController(options: InputControllerOptions = {}): Inp
 
     event.preventDefault();
     activeJoystick = null;
+
+    if (activeJoystickAction) {
+      emit({ action: activeJoystickAction, kind: "released", source: "pointer" });
+      activeJoystickAction = null;
+    }
+
     resetJoystickVisuals(controls);
 
     if (controls.joystick.hasPointerCapture(event.pointerId)) {
@@ -203,6 +219,12 @@ export function createInputController(options: InputControllerOptions = {}): Inp
     }
 
     activeJoystick = null;
+
+    if (activeJoystickAction) {
+      emit({ action: activeJoystickAction, kind: "released", source: "pointer" });
+      activeJoystickAction = null;
+    }
+
     resetJoystickVisuals(controls);
   };
 

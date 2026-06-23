@@ -8,7 +8,6 @@ export interface GameProgress {
 }
 
 export type FeatureKey =
-  | "combo"
   | "blackHole"
   | "starGate"
   | "evolution"
@@ -41,7 +40,6 @@ export interface UnlockedFeatures {
   score: boolean;
   sprint: boolean;
   particles: boolean;
-  combo: boolean;
   blackHole: boolean;
   starGate: boolean;
   evolution: boolean;
@@ -69,7 +67,6 @@ export interface SafeSpawnConfig {
 
 export const DEFAULT_UNLOCK_CONFIG: UnlockConfig = {
   featureFlags: {
-    combo: true,
     blackHole: true,
     starGate: true,
     evolution: true,
@@ -79,7 +76,6 @@ export const DEFAULT_UNLOCK_CONFIG: UnlockConfig = {
     boss: true
   },
   rules: {
-    combo: { anyOf: [{ snakeLength: 5 }, { coresEaten: 4 }] },
     blackHole: { anyOf: [{ snakeLength: 7 }] },
     starGate: { anyOf: [{ snakeLength: 9 }] },
     evolution: { anyOf: [{ coresEaten: 6 }] },
@@ -105,7 +101,6 @@ export function getUnlockedFeatures(gameState: GameProgress, config: UnlockConfi
     score: true,
     sprint: true,
     particles: true,
-    combo: unlocked('combo'),
     blackHole: unlocked('blackHole'),
     starGate: unlocked('starGate'),
     evolution: unlocked('evolution'),

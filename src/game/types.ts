@@ -2,15 +2,25 @@ export type GamePhase = "ready" | "playing" | "paused" | "gameOver";
 
 export type Direction = "up" | "right" | "down" | "left";
 
+export type BlackHoleKind = "small" | "large";
+
+export type BlackHoleBand = "core" | "strong" | "medium" | "weak";
+
 export type InputSource = "keyboard" | "pointer";
 
 export type InputEventKind = "pressed" | "released";
+
+export type SpeedMode = "base" | "accelerate" | "brake" | "boost";
+
+export type SpeedCueMode = Exclude<SpeedMode, "base">;
 
 export type InputAction =
   | "start"
   | "pause"
   | "restart"
   | "boost"
+  | "speed-accelerate"
+  | "speed-brake"
   | "move-up"
   | "move-right"
   | "move-down"
@@ -38,9 +48,35 @@ export interface GridCell {
 }
 
 export interface BlackHole {
+  kind: BlackHoleKind;
   cell: GridCell;
   seed: number;
   spawnTime: number;
+  activateAt: number;
+}
+
+export interface BlackHoleAlert {
+  blackHole: BlackHole;
+  distance: number;
+}
+
+export interface BlackHoleCue {
+  blackHole: BlackHole;
+  band: Exclude<BlackHoleBand, "core">;
+  distance: number;
+  charge: number;
+  chargeThreshold: number;
+  pullDirection: Direction | null;
+  isFirstTick: boolean;
+  isPulling: boolean;
+  isEscaping: boolean;
+}
+
+export interface SpeedCue {
+  mode: SpeedCueMode;
+  anchor: GridCell;
+  startedAt: number;
+  fadeProgress: number;
 }
 
 export interface GameSnapshot {
@@ -49,14 +85,14 @@ export interface GameSnapshot {
   snake: readonly GridCell[];
   foods: readonly GridCell[];
   blackHoles: readonly BlackHole[];
+  blackHoleAlert: BlackHoleAlert | null;
+  blackHoleCue: BlackHoleCue | null;
   score: number;
   highScore: number;
   direction: Direction;
-  comboCount: number;
-  comboMultiplier: number;
-  comboTimer: number;
-  comboMaxTimer: number;
-  isComboUnlocked: boolean;
+  speedMode: SpeedMode;
+  speedMultiplier: number;
+  speedCue: SpeedCue | null;
 }
 
 export interface FrameInfo {
@@ -107,11 +143,7 @@ export interface GameUiElements {
   root: HTMLElement;
   startPanel: HTMLElement;
   scoreLabel: HTMLElement;
-  comboPanel: HTMLElement;
-  comboLabel: HTMLElement;
-  comboCountLabel: HTMLElement;
-  comboTimerLabel: HTMLElement;
-  comboTimerBar: HTMLElement;
+  lengthLabel: HTMLElement;
   bestLabel: HTMLElement;
   stateLabel: HTMLElement;
   fpsLabel: HTMLElement;

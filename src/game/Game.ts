@@ -1,5 +1,14 @@
 import { createAudioController, type AudioController } from "./audio";
-import { getDesiredBlackHoleCount, isBlackHoleCollision, spawnBlackHole } from "./blackHole";
+import {
+  getBlackHoleFoodAvoidRadiusCells,
+  getBlackHoleKindForSpawn,
+  getDesiredBlackHoleCount,
+  isBlackHoleCollision,
+  resolveBlackHoleAlert,
+  resolveBlackHoleMovement,
+  spawnBlackHole,
+  type BlackHoleGravityState,
+} from "./blackHole";
 import { createInputController } from "./input";
 import { DEFAULT_SAFE_SPAWN_CONFIG, getUnlockedFeatures as computeUnlockedFeatures, type GameProgress, type UnlockedFeatures } from "./progression";
 import { findSafeSpawnPosition } from "./spawn";
@@ -17,7 +26,10 @@ import type {
   InputAction,
   InputCommand,
   InputController,
+  InputSource,
   Renderer,
+  SpeedCueMode,
+  SpeedMode,
   Unsubscribe,
 } from "./types";
 
@@ -47,14 +59,14 @@ const OPPOSITE_DIRECTIONS: Record<Direction, Direction> = {
   left: "right",
 };
 
-const STEP_MS = 120;
-const BOOST_STEP_MS = 72;
+const BASE_STEP_MS = 144;
+const BOOST_STEP_RATIO = 0.6;
+const ACCELERATE_SPEED_MULTIPLIER = 1.3;
+const BRAKE_SPEED_MULTIPLIER = 0.5;
+const SPEED_CUE_DURATION_MS = 1500;
 const MAX_DIRECTION_QUEUE_LENGTH = 2;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
-const COMBO_MAX_TIMER_MS = 4000;
-const COMBO_MAX_COUNT = 99;
-const COMBO_UNLOCKED_CAP_MULTIPLIER = 4;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
 const MIN_ROWS = 10;
@@ -106,6 +118,30 @@ function cellsMatch(left: GridCell, right: GridCell): boolean {
   return left.column === right.column && left.row === right.row;
 }
 
+interface ActiveDirectionalInput {
+  action: Direction;
+  source: InputSource;
+  order: number;
+}
+
+interface ActiveSpeedInput {
+  mode: SpeedCueMode;
+  source: InputSource;
+  order: number;
+}
+
+interface SpeedCueState {
+  mode: SpeedCueMode;
+  anchor: GridCell;
+  startedAt: number;
+}
+
+interface MovementSpeedState {
+  mode: SpeedMode;
+  multiplier: number;
+  stepMs: number;
+}
+
 export class Game {
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: GameUiElements;
@@ -113,32 +149,36 @@ export class Game {
   private readonly input: InputController;
   private readonly audio: AudioController;
   private readonly unsubscribers: Unsubscribe[] = [];
+  private readonly activeDirectionalInputs = new Map<string, ActiveDirectionalInput>();
+  private readonly activeSpeedInputs = new Map<string, ActiveSpeedInput>();
 
   private phase: GamePhase = "ready";
   private grid: GridMetrics;
   private snake: GridCell[] = [];
   private foods: GridCell[] = [];
   private blackHoles: BlackHole[] = [];
+  private blackHoleAlert: GameSnapshot["blackHoleAlert"] = null;
+  private blackHoleGravityState: BlackHoleGravityState = { key: null, charge: 0 };
+  private blackHoleCue: GameSnapshot["blackHoleCue"] = null;
+  private blackHoleRecoveryDirection: Direction | null = null;
   private birthCell: GridCell = { column: 0, row: 0 };
   private direction: Direction = "right";
   private directionQueue: Direction[] = [];
   private score = 0;
   private coresEaten = 0;
-  private comboCount = 0;
-  private comboMultiplier = 1;
-  private comboTimer = 0;
-  private comboMaxTimer = COMBO_MAX_TIMER_MS;
-  private lastCoreEatTime = 0;
-  private isComboUnlocked = false;
   private highScore: number;
   private frameId: number | null = null;
   private elapsed = 0;
   private playElapsed = 0;
+  private movementTick = 0;
   private stepAccumulator = 0;
   private lastFrameTime = 0;
   private lastUiUpdate = 0;
   private lastFps = 0;
   private isBoosting = false;
+  private speedCue: SpeedCueState | null = null;
+  private lastMovementSpeedMode: SpeedMode = "base";
+  private activeInputSequence = 0;
 
   public constructor(options: GameOptions) {
     this.canvas = options.canvas;
@@ -196,16 +236,27 @@ export class Game {
 
     if (this.phase === "playing") {
       this.playElapsed += delta;
-      this.refreshComboUnlockState();
-      this.tickComboTimer(delta);
       this.stepAccumulator += delta;
-      const stepMs = this.isBoosting ? BOOST_STEP_MS : STEP_MS;
 
-      while (this.stepAccumulator >= stepMs && this.phase === "playing") {
+      let movementSpeed = this.getMovementSpeedState();
+      this.updateSpeedCueState(movementSpeed);
+
+      while (this.phase === "playing") {
+        const stepMs = movementSpeed.stepMs;
+
+        if (this.stepAccumulator < stepMs) {
+          break;
+        }
+
         this.advanceSnake();
         this.stepAccumulator -= stepMs;
+
+        movementSpeed = this.getMovementSpeedState();
+        this.updateSpeedCueState(movementSpeed);
       }
     }
+
+    this.expireSpeedCue();
 
     const size = this.renderer.getSize();
     this.renderer.render({
@@ -239,14 +290,29 @@ export class Game {
       return;
     }
 
-    if (command.kind !== "pressed") {
+    if (command.action === "speed-accelerate") {
+      this.updateSpeedInputState(command, "accelerate");
+      return;
+    }
+
+    if (command.action === "speed-brake") {
+      this.updateSpeedInputState(command, "brake");
       return;
     }
 
     const direction = directionFromAction(command.action);
 
     if (direction) {
-      this.queueDirection(direction);
+      this.updateDirectionalInputState(command, direction);
+
+      if (command.kind === "pressed") {
+        this.queueDirection(direction);
+      }
+
+      return;
+    }
+
+    if (command.kind !== "pressed") {
       return;
     }
 
@@ -317,6 +383,148 @@ export class Game {
     this.isBoosting = active && this.phase === "playing";
   }
 
+  private updateSpeedInputState(command: InputCommand, mode: SpeedCueMode): void {
+    const key = `${command.source}:${command.action}`;
+
+    if (command.kind === "pressed") {
+      this.activeInputSequence += 1;
+      this.activeSpeedInputs.set(key, {
+        mode,
+        source: command.source,
+        order: this.activeInputSequence,
+      });
+      return;
+    }
+
+    this.activeSpeedInputs.delete(key);
+  }
+
+  private updateDirectionalInputState(command: InputCommand, direction: Direction): void {
+    const key = `${command.source}:${command.action}`;
+
+    if (command.kind === "pressed") {
+      this.activeInputSequence += 1;
+      this.activeDirectionalInputs.set(key, {
+        action: direction,
+        source: command.source,
+        order: this.activeInputSequence,
+      });
+      return;
+    }
+
+    this.activeDirectionalInputs.delete(key);
+  }
+
+  private getActiveDirectionalInput(): ActiveDirectionalInput | null {
+    let activeInput: ActiveDirectionalInput | null = null;
+
+    for (const input of this.activeDirectionalInputs.values()) {
+      if (!activeInput || input.order > activeInput.order) {
+        activeInput = input;
+      }
+    }
+    return activeInput;
+  }
+
+  private getActiveSpeedInput(): ActiveSpeedInput | null {
+    let activeInput: ActiveSpeedInput | null = null;
+
+    for (const input of this.activeSpeedInputs.values()) {
+      if (!activeInput || input.order > activeInput.order) {
+        activeInput = input;
+      }
+    }
+
+    return activeInput;
+  }
+
+  private getMovementSpeedStateFromMode(mode: SpeedMode): MovementSpeedState {
+    switch (mode) {
+      case "boost":
+        return {
+          mode,
+          multiplier: 1 / BOOST_STEP_RATIO,
+          stepMs: BASE_STEP_MS * BOOST_STEP_RATIO,
+        };
+      case "accelerate":
+        return {
+          mode,
+          multiplier: ACCELERATE_SPEED_MULTIPLIER,
+          stepMs: BASE_STEP_MS / ACCELERATE_SPEED_MULTIPLIER,
+        };
+      case "brake":
+        return {
+          mode,
+          multiplier: BRAKE_SPEED_MULTIPLIER,
+          stepMs: BASE_STEP_MS / BRAKE_SPEED_MULTIPLIER,
+        };
+      default:
+        return { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
+    }
+  }
+
+  private getMovementSpeedState(): MovementSpeedState {
+    if (this.phase !== "playing") {
+      return { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
+    }
+
+    if (this.isBoosting) {
+      return this.getMovementSpeedStateFromMode("boost");
+    }
+
+    const candidates: Array<{ mode: SpeedCueMode; order: number }> = [];
+    const activeDirectionalInput = this.getActiveDirectionalInput();
+
+    if (activeDirectionalInput) {
+      if (activeDirectionalInput.action === this.direction) {
+        candidates.push({ mode: "accelerate", order: activeDirectionalInput.order });
+      } else if (activeDirectionalInput.action === OPPOSITE_DIRECTIONS[this.direction]) {
+        candidates.push({ mode: "brake", order: activeDirectionalInput.order });
+      }
+    }
+
+    const activeSpeedInput = this.getActiveSpeedInput();
+
+    if (activeSpeedInput) {
+      candidates.push({ mode: activeSpeedInput.mode, order: activeSpeedInput.order });
+    }
+
+    const latestCandidate = candidates.reduce<{ mode: SpeedCueMode; order: number } | null>(
+      (latest, candidate) => (!latest || candidate.order > latest.order ? candidate : latest),
+      null,
+    );
+
+    return latestCandidate ? this.getMovementSpeedStateFromMode(latestCandidate.mode) : { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
+  }
+
+  private updateSpeedCueState(movementSpeed: MovementSpeedState): void {
+    if (movementSpeed.mode !== this.lastMovementSpeedMode) {
+      this.lastMovementSpeedMode = movementSpeed.mode;
+
+      if (movementSpeed.mode !== "base") {
+        const head = this.snake[0];
+
+        if (head) {
+          this.speedCue = {
+            mode: movementSpeed.mode,
+            anchor: { ...head },
+            startedAt: this.elapsed,
+          };
+        }
+      }
+    }
+  }
+
+  private expireSpeedCue(): void {
+    if (!this.speedCue) {
+      return;
+    }
+
+    if (this.elapsed - this.speedCue.startedAt >= SPEED_CUE_DURATION_MS) {
+      this.speedCue = null;
+    }
+  }
+
   private queueDirection(direction: Direction): void {
     if (this.phase !== "playing") {
       return;
@@ -339,17 +547,21 @@ export class Game {
     this.phase = phase;
     this.score = 0;
     this.coresEaten = 0;
-    this.comboCount = 0;
-    this.comboMultiplier = 1;
-    this.comboTimer = 0;
-    this.comboMaxTimer = COMBO_MAX_TIMER_MS;
-    this.lastCoreEatTime = 0;
-    this.isComboUnlocked = false;
     this.direction = "right";
     this.directionQueue = [];
     this.isBoosting = false;
+    this.activeDirectionalInputs.clear();
+    this.activeSpeedInputs.clear();
+    this.activeInputSequence = 0;
+    this.speedCue = null;
+    this.lastMovementSpeedMode = "base";
     this.stepAccumulator = 0;
     this.playElapsed = 0;
+    this.movementTick = 0;
+    this.blackHoleGravityState = { key: null, charge: 0 };
+    this.blackHoleAlert = null;
+    this.blackHoleCue = null;
+    this.blackHoleRecoveryDirection = null;
     this.snake = this.createStartingSnake();
     this.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
     this.blackHoles = [];
@@ -394,7 +606,10 @@ export class Game {
         ...this.blackHoles.map((blackHole) => blackHole.cell),
         ...extraBlocked,
       ],
-      dangerZones: this.blackHoles.map((blackHole) => ({ center: blackHole.cell, radius: 1 })),
+      dangerZones: this.blackHoles.map((blackHole) => ({
+        center: blackHole.cell,
+        radius: getBlackHoleFoodAvoidRadiusCells(blackHole),
+      })),
     });
   }
 
@@ -418,7 +633,74 @@ export class Game {
       return;
     }
 
-    this.direction = this.directionQueue.shift() ?? this.direction;
+    this.movementTick += 1;
+    const currentTime = this.elapsed / 1000;
+    const recoveryDirection = this.blackHoleRecoveryDirection;
+    const shouldRecoverStraight = recoveryDirection !== null;
+    let intendedDirection: Direction;
+
+    if (shouldRecoverStraight) {
+      intendedDirection = recoveryDirection;
+    } else {
+      intendedDirection = this.directionQueue[0] ?? this.direction;
+    }
+
+    if (shouldRecoverStraight) {
+      this.blackHoleRecoveryDirection = null;
+      this.blackHoleGravityState = { key: null, charge: 0 };
+      this.blackHoleCue = null;
+      this.direction = intendedDirection;
+    } else if (this.directionQueue.length > 0) {
+      this.directionQueue.shift();
+
+      const resolution = resolveBlackHoleMovement(
+        head,
+        intendedDirection,
+        this.direction,
+        this.blackHoles,
+        currentTime,
+        this.blackHoleGravityState,
+      );
+
+      this.blackHoleGravityState = resolution.nextGravityState;
+      this.blackHoleCue = resolution.cue;
+
+      if (resolution.shouldDie) {
+        this.direction = resolution.finalDirection;
+        this.endRun();
+        return;
+      }
+
+      this.direction = resolution.finalDirection;
+
+      if (resolution.shouldPlayPull) {
+        this.blackHoleRecoveryDirection = intendedDirection;
+      }
+    } else {
+      const resolution = resolveBlackHoleMovement(
+        head,
+        intendedDirection,
+        this.direction,
+        this.blackHoles,
+        currentTime,
+        this.blackHoleGravityState,
+      );
+
+      this.blackHoleGravityState = resolution.nextGravityState;
+      this.blackHoleCue = resolution.cue;
+
+      if (resolution.shouldDie) {
+        this.direction = resolution.finalDirection;
+        this.endRun();
+        return;
+      }
+
+      this.direction = resolution.finalDirection;
+
+      if (resolution.shouldPlayPull) {
+        this.blackHoleRecoveryDirection = intendedDirection;
+      }
+    }
 
     const delta = DIRECTION_DELTAS[this.direction];
     const nextHead: GridCell = {
@@ -446,6 +728,7 @@ export class Game {
       this.handleCoreEat();
       this.refreshBlackHoles();
       this.refillFoods();
+      this.updateBlackHoleAlert(currentTime);
       this.saveHighScoreIfNeeded();
 
       if (this.foods.length === 0) {
@@ -456,20 +739,11 @@ export class Game {
     }
 
     this.snake.pop();
+    this.updateBlackHoleAlert(currentTime);
   }
 
   private handleCoreEat(): void {
-    const wasComboUnlocked = this.isComboUnlocked;
-    const timeSinceLastCore = this.lastCoreEatTime > 0 ? this.playElapsed - this.lastCoreEatTime : Number.POSITIVE_INFINITY;
-    const canContinueCombo = timeSinceLastCore <= this.comboMaxTimer;
-    const nextComboCount = canContinueCombo ? this.comboCount + 1 : 1;
-
-    this.comboCount = Math.min(COMBO_MAX_COUNT, nextComboCount);
-    this.comboMultiplier = this.getComboMultiplier(this.comboCount);
-    this.comboTimer = this.comboMaxTimer;
-    this.lastCoreEatTime = this.playElapsed;
-    this.refreshComboUnlockState();
-    this.score += SCORE_PER_CORE * (wasComboUnlocked ? this.comboMultiplier : 1);
+    this.score += SCORE_PER_CORE;
   }
 
   private refreshBlackHoles(): void {
@@ -484,6 +758,7 @@ export class Game {
         existingBlackHoles: this.blackHoles,
         birthCell: this.birthCell,
         currentTime: this.elapsed / 1000,
+        kind: getBlackHoleKindForSpawn(this.getProgress(), this.grid),
       });
 
       if (!nextBlackHole) {
@@ -494,42 +769,18 @@ export class Game {
     }
   }
 
-  private refreshComboUnlockState(): void {
-    if (this.isComboUnlocked) {
-      return;
-    }
-
-    const features = computeUnlockedFeatures(this.getProgress());
-    this.isComboUnlocked = features.combo;
-  }
-
-  private tickComboTimer(delta: number): void {
-    if (this.comboTimer <= 0) {
-      return;
-    }
-
-    this.comboTimer = Math.max(0, this.comboTimer - delta);
-
-    if (this.comboTimer === 0) {
-      this.comboCount = 0;
-      this.comboMultiplier = 1;
-    }
-  }
-
-  private getComboMultiplier(comboCount: number): number {
-    if (comboCount >= 10) return COMBO_UNLOCKED_CAP_MULTIPLIER;
-    if (comboCount >= 6) return 3;
-    if (comboCount >= 3) return 2;
-    return 1;
-  }
-
   private collidesWithSelf(cell: GridCell, willGrow: boolean): boolean {
     const bodyToCheck = willGrow ? this.snake : this.snake.slice(0, -1);
     return bodyToCheck.some((segment) => cellsMatch(segment, cell));
   }
 
   private collidesWithBlackHole(cell: GridCell): boolean {
-    return this.blackHoles.some((blackHole) => isBlackHoleCollision(cell, blackHole, this.grid));
+    return this.blackHoles.some((blackHole) => isBlackHoleCollision(cell, blackHole, this.elapsed / 1000));
+  }
+
+  private updateBlackHoleAlert(currentTime: number): void {
+    const head = this.snake[0];
+    this.blackHoleAlert = head ? resolveBlackHoleAlert(head, this.blackHoles, currentTime) : null;
   }
 
   private isOutOfBounds(cell: GridCell): boolean {
@@ -577,6 +828,9 @@ export class Game {
     this.phase = "gameOver";
     this.isBoosting = false;
     this.stepAccumulator = 0;
+    this.blackHoleRecoveryDirection = null;
+    this.speedCue = null;
+    this.lastMovementSpeedMode = "base";
     this.saveHighScoreIfNeeded();
     this.syncUi(true);
   }
@@ -590,7 +844,28 @@ export class Game {
     writeHighScore(this.highScore);
   }
 
+  private getSpeedCueSnapshot(): GameSnapshot["speedCue"] {
+    if (!this.speedCue) {
+      return null;
+    }
+
+    const age = this.elapsed - this.speedCue.startedAt;
+
+    if (age >= SPEED_CUE_DURATION_MS) {
+      return null;
+    }
+
+    return {
+      mode: this.speedCue.mode,
+      anchor: { ...this.speedCue.anchor },
+      startedAt: this.speedCue.startedAt,
+      fadeProgress: Math.max(0, Math.min(1, age / SPEED_CUE_DURATION_MS)),
+    };
+  }
+
   private createSnapshot(): GameSnapshot {
+    const movementSpeed = this.getMovementSpeedState();
+
     return {
       phase: this.phase,
       grid: { ...this.grid },
@@ -600,14 +875,30 @@ export class Game {
         ...blackHole,
         cell: { ...blackHole.cell },
       })),
+      blackHoleAlert: this.blackHoleAlert
+        ? {
+            ...this.blackHoleAlert,
+            blackHole: {
+              ...this.blackHoleAlert.blackHole,
+              cell: { ...this.blackHoleAlert.blackHole.cell },
+            },
+          }
+        : null,
+      blackHoleCue: this.blackHoleCue
+        ? {
+            ...this.blackHoleCue,
+            blackHole: {
+              ...this.blackHoleCue.blackHole,
+              cell: { ...this.blackHoleCue.blackHole.cell },
+            },
+          }
+        : null,
       score: this.score,
       highScore: this.highScore,
       direction: this.direction,
-      comboCount: this.comboCount,
-      comboMultiplier: this.comboMultiplier,
-      comboTimer: this.comboTimer,
-      comboMaxTimer: this.comboMaxTimer,
-      isComboUnlocked: this.isComboUnlocked,
+      speedMode: movementSpeed.mode,
+      speedMultiplier: movementSpeed.multiplier,
+      speedCue: this.getSpeedCueSnapshot(),
     };
   }
 
@@ -640,13 +931,7 @@ export class Game {
     this.ui.pauseButton.textContent = this.phase === "paused" ? ">" : "P";
     this.ui.pauseButton.setAttribute("aria-label", this.phase === "paused" ? "Resume" : "Pause");
     this.ui.scoreLabel.textContent = this.score.toString();
-    this.ui.comboPanel.dataset.unlocked = this.isComboUnlocked ? "true" : "false";
-    this.ui.comboLabel.textContent = this.isComboUnlocked ? `x${this.comboMultiplier}` : "Locked";
-    this.ui.comboCountLabel.textContent = this.isComboUnlocked ? `${this.comboCount} chain` : "0 chain";
-    this.ui.comboTimerLabel.textContent = this.isComboUnlocked ? `${Math.ceil(this.comboTimer / 1000)}s` : "--";
-    this.ui.comboTimerBar.style.width = this.isComboUnlocked && this.comboMaxTimer > 0
-      ? `${Math.max(0, Math.min(100, (this.comboTimer / this.comboMaxTimer) * 100))}%`
-      : "0%";
+    this.ui.lengthLabel.textContent = this.snake.length.toString();
     this.ui.bestLabel.textContent = this.highScore.toString();
     this.ui.stateLabel.textContent = PHASE_LABELS[this.phase];
     this.ui.fpsLabel.textContent = `${this.lastFps || "--"} FPS`;
