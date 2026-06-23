@@ -41,10 +41,15 @@ export interface GameSnapshot {
   phase: GamePhase;
   grid: GridMetrics;
   snake: readonly GridCell[];
-  food: GridCell | null;
+  foods: readonly GridCell[];
   score: number;
   highScore: number;
   direction: Direction;
+  comboCount: number;
+  comboMultiplier: number;
+  comboTimer: number;
+  comboMaxTimer: number;
+  isComboUnlocked: boolean;
 }
 
 export interface FrameInfo {
@@ -95,7 +100,11 @@ export interface GameUiElements {
   root: HTMLElement;
   startPanel: HTMLElement;
   scoreLabel: HTMLElement;
+  comboPanel: HTMLElement;
   comboLabel: HTMLElement;
+  comboCountLabel: HTMLElement;
+  comboTimerLabel: HTMLElement;
+  comboTimerBar: HTMLElement;
   bestLabel: HTMLElement;
   stateLabel: HTMLElement;
   fpsLabel: HTMLElement;

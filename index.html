@@ -24,7 +24,13 @@
 
           <div class="status-cluster">
             <span class="stat-chip"><span>Score</span><strong id="score-label">0</strong></span>
-            <span class="stat-chip"><span>Combo</span><strong id="combo-label">x1</strong></span>
+            <span id="combo-panel" class="stat-chip combo-chip" data-unlocked="false">
+              <span>Combo</span>
+              <strong id="combo-label">Locked</strong>
+              <span id="combo-count-label" class="combo-count">0 chain</span>
+              <span class="combo-meter" aria-hidden="true"><span id="combo-timer-bar"></span></span>
+              <span id="combo-timer-label" class="combo-timer">--</span>
+            </span>
             <span class="stat-chip"><span>Best</span><strong id="best-label">0</strong></span>
           </div>
 

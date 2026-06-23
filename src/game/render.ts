@@ -57,9 +57,10 @@ interface RenderState {
   rewardBursts: RewardBurst[];
   trails: TrailSample[];
   previousScore: number | null;
+  previousComboCount: number | null;
   previousPhase: GameSnapshot["phase"] | null;
   previousSnakeHeadKey: string | null;
-  previousFood: GridCell | null;
+  previousFoods: GridCell[];
   shake: ShakeState;
 }
 
@@ -127,9 +128,10 @@ function createRenderState(): RenderState {
     rewardBursts: [],
     trails: [],
     previousScore: null,
+    previousComboCount: null,
     previousPhase: null,
     previousSnakeHeadKey: null,
-    previousFood: null,
+    previousFoods: [],
     shake: {
       time: 0,
       duration: 0,
@@ -145,8 +147,8 @@ function cellKey(cell: GridCell | null | undefined): string | null {
   return cell ? `${cell.column}:${cell.row}` : null;
 }
 
-function cloneCell(cell: GridCell | null): GridCell | null {
-  return cell ? { column: cell.column, row: cell.row } : null;
+function cellsMatch(left: GridCell, right: GridCell): boolean {
+  return left.column === right.column && left.row === right.row;
 }
 
 function prefersReducedMotion(): boolean {
@@ -245,6 +247,24 @@ function spawnRewardBurst(state: RenderState, x: number, y: number, cellSize: nu
   }
 }
 
+function getComboVisualStrength(snapshot: GameSnapshot): number {
+  if (!snapshot.isComboUnlocked) {
+    return 0;
+  }
+
+  return Math.max(0, Math.min(1, (snapshot.comboMultiplier - 1) / 3 + snapshot.comboCount / 16));
+}
+
+function findRemovedFood(previousFoods: readonly GridCell[], currentFoods: readonly GridCell[]): GridCell | null {
+  for (const previousFood of previousFoods) {
+    if (!currentFoods.some((currentFood) => cellsMatch(currentFood, previousFood))) {
+      return previousFood;
+    }
+  }
+
+  return previousFoods[0] ?? null;
+}
+
 function rewardShakeDirection(grid: GridMetrics, point: { x: number; y: number }): { x: number; y: number } {
   const boardCenterX = grid.offsetX + grid.columns * grid.cellSize * 0.5;
   const boardCenterY = grid.offsetY + grid.rows * grid.cellSize * 0.5;
@@ -267,7 +287,9 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   const head = snapshot.snake[0] ?? null;
   const headKey = cellKey(head);
   const scoreIncreased = state.previousScore !== null && snapshot.score > state.previousScore;
+  const comboIncreased = state.previousComboCount !== null && snapshot.comboCount > state.previousComboCount;
   const enteredGameOver = snapshot.phase === "gameOver" && state.previousPhase !== "gameOver";
+  const comboVisual = getComboVisualStrength(snapshot);
 
   for (const particle of state.particles) {
     particle.life -= dt;
@@ -293,18 +315,35 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   state.shake.time = Math.max(0, state.shake.time - dt);
 
   if (scoreIncreased) {
-    const burstCell = state.previousFood ?? head;
+    const burstCell = findRemovedFood(state.previousFoods, snapshot.foods) ?? head;
 
     if (burstCell) {
       const center = cellCenter(snapshot.grid, burstCell);
       const shakeDirection = rewardShakeDirection(snapshot.grid, center);
+      const particleCount = Math.min(96, 44 + Math.round(comboVisual * 24));
+      const particlePower = snapshot.grid.cellSize * (12 + comboVisual * 3.2);
 
       spawnRewardBurst(state, center.x, center.y, snapshot.grid.cellSize);
-      spawnBurst(state, center.x, center.y, 52, 72, snapshot.grid.cellSize * 12);
+      spawnBurst(state, center.x, center.y, particleCount, 72, particlePower);
 
       if (!prefersReducedMotion()) {
-        triggerShake(state, 2.05, 0.12, "reward", shakeDirection.x, shakeDirection.y);
+        triggerShake(state, 2.05 + comboVisual * 0.9, 0.12, "reward", shakeDirection.x, shakeDirection.y);
       }
+    }
+  }
+
+  if (comboIncreased && !prefersReducedMotion()) {
+    const comboCenter = head ? cellCenter(snapshot.grid, head) : null;
+    if (comboCenter && snapshot.isComboUnlocked) {
+      spawnBurst(
+        state,
+        comboCenter.x,
+        comboCenter.y,
+        Math.min(28, 10 + snapshot.comboMultiplier * 5),
+        184,
+        snapshot.grid.cellSize * (7 + comboVisual * 4),
+      );
+      spawnRewardBurst(state, comboCenter.x, comboCenter.y, snapshot.grid.cellSize * 0.78);
     }
   }
 
@@ -332,9 +371,10 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   }
 
   state.previousScore = snapshot.score;
+  state.previousComboCount = snapshot.comboCount;
   state.previousPhase = snapshot.phase;
   state.previousSnakeHeadKey = headKey;
-  state.previousFood = cloneCell(snapshot.food);
+  state.previousFoods = snapshot.foods.map((food) => ({ ...food }));
 }
 
 function drawBackground(context: CanvasRenderingContext2D, size: CanvasSize, time: number): void {
@@ -430,6 +470,35 @@ function drawStars(context: CanvasRenderingContext2D, size: CanvasSize, stars: r
     context.stroke();
   }
 
+  context.restore();
+}
+
+function drawComboPulseOverlay(context: CanvasRenderingContext2D, size: CanvasSize, snapshot: GameSnapshot, time: number): void {
+  if (!snapshot.isComboUnlocked) {
+    return;
+  }
+
+  const pulseStrength = getComboVisualStrength(snapshot);
+  const pulse = 0.62 + Math.sin(time * (2.1 + pulseStrength * 2.2)) * 0.38;
+  const overlay = context.createRadialGradient(
+    size.width * 0.5,
+    size.height * 0.42,
+    0,
+    size.width * 0.5,
+    size.height * 0.5,
+    Math.max(size.width, size.height) * (0.7 + pulseStrength * 0.08),
+  );
+
+  overlay.addColorStop(0, `rgba(219, 255, 82, ${0.1 + pulseStrength * 0.1})`);
+  overlay.addColorStop(0.22, `rgba(255, 43, 214, ${0.08 + pulseStrength * 0.06})`);
+  overlay.addColorStop(0.44, `rgba(0, 245, 255, ${0.08 + pulseStrength * 0.06})`);
+  overlay.addColorStop(1, "rgba(0, 0, 0, 0)");
+
+  context.save();
+  context.globalCompositeOperation = "lighter";
+  context.globalAlpha = 0.62 + pulse * 0.18;
+  context.fillStyle = overlay;
+  context.fillRect(0, 0, size.width, size.height);
   context.restore();
 }
 
@@ -540,12 +609,12 @@ function drawBoard(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
   const { grid } = snapshot;
   const width = grid.columns * grid.cellSize;
   const height = grid.rows * grid.cellSize;
-  const pulse = 0.5 + Math.sin(time * 2.1) * 0.5;
+  const pulse = 0.5 + Math.sin(time * (2.1 + getComboVisualStrength(snapshot) * 1.15)) * 0.5;
 
   context.save();
   context.globalCompositeOperation = "source-over";
   context.shadowColor = "rgba(0, 245, 255, 0.54)";
-  context.shadowBlur = 30 + pulse * 12;
+  context.shadowBlur = 30 + pulse * 18;
   context.fillStyle = "rgba(1, 8, 20, 0.7)";
   fillRoundedRect(context, grid.offsetX - 9, grid.offsetY - 9, width + 18, height + 18, 14);
 
@@ -556,7 +625,7 @@ function drawBoard(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
   context.strokeRect(grid.offsetX - 0.5, grid.offsetY - 0.5, width + 1, height + 1);
 
   context.shadowBlur = 0;
-  context.globalAlpha = 0.22;
+  context.globalAlpha = 0.22 + getComboVisualStrength(snapshot) * 0.08;
   context.strokeStyle = "rgba(0, 245, 255, 0.34)";
 
   for (let column = 1; column < grid.columns; column += 1) {
@@ -579,63 +648,74 @@ function drawBoard(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
 }
 
 function drawFood(context: CanvasRenderingContext2D, snapshot: GameSnapshot, time: number): void {
-  const { food, grid } = snapshot;
+  const { foods, grid } = snapshot;
 
-  if (!food) {
+  if (foods.length === 0) {
     return;
   }
 
-  const center = cellCenter(grid, food);
-  const pulse = 0.72 + Math.sin(time * 8.4) * 0.28;
-  const outerRadius = grid.cellSize * (0.38 + pulse * 0.06);
-  const innerRadius = outerRadius * 0.43;
-
   context.save();
-  context.translate(center.x, center.y);
-  context.rotate(time * 1.35);
   context.globalCompositeOperation = "lighter";
 
-  context.globalAlpha = 0.36 + pulse * 0.22;
-  context.strokeStyle = "rgba(219, 255, 82, 0.7)";
-  context.shadowColor = "#dbff52";
-  context.shadowBlur = 22;
-  context.lineWidth = 1.2;
-
-  for (let ring = 0; ring < 3; ring += 1) {
-    context.beginPath();
-    context.ellipse(0, 0, outerRadius * (1.25 + ring * 0.42), outerRadius * (0.46 + ring * 0.12), ring * 0.72, 0, Math.PI * 2);
-    context.stroke();
-  }
-
-  context.globalAlpha = 1;
-  context.fillStyle = "rgba(219, 255, 82, 0.24)";
-  context.beginPath();
-  context.arc(0, 0, outerRadius * 1.72, 0, Math.PI * 2);
-  context.fill();
-
-  const starGradient = context.createRadialGradient(-outerRadius * 0.22, -outerRadius * 0.25, 0, 0, 0, outerRadius);
-  starGradient.addColorStop(0, "#ffffff");
-  starGradient.addColorStop(0.3, "#dbff52");
-  starGradient.addColorStop(1, "#00f5ff");
-  context.fillStyle = starGradient;
-  context.shadowBlur = 30;
-  context.beginPath();
-
-  for (let point = 0; point < 12; point += 1) {
-    const radius = point % 2 === 0 ? outerRadius : innerRadius;
-    const angle = -Math.PI / 2 + (point * Math.PI) / 6;
-    const x = Math.cos(angle) * radius;
-    const y = Math.sin(angle) * radius;
-
-    if (point === 0) {
-      context.moveTo(x, y);
-    } else {
-      context.lineTo(x, y);
+  for (let index = 0; index < foods.length; index += 1) {
+    const food = foods[index];
+    if (!food) {
+      continue;
     }
+    const center = cellCenter(grid, food);
+    const comboBoost = snapshot.isComboUnlocked ? Math.min(1, Math.max(0, (snapshot.comboMultiplier - 1) / 3)) : 0;
+    const pulse = 0.72 + Math.sin(time * (8.4 + comboBoost * 1.8) + index * 1.3) * 0.28;
+    const outerRadius = grid.cellSize * (0.34 + pulse * 0.07 + index * 0.02);
+    const innerRadius = outerRadius * 0.43;
+
+    context.save();
+    context.translate(center.x, center.y);
+    context.rotate(time * 1.35 + index * 0.7);
+
+    context.globalAlpha = 0.38 + pulse * 0.24;
+    context.strokeStyle = index === 0 ? "rgba(219, 255, 82, 0.78)" : "rgba(0, 245, 255, 0.62)";
+    context.shadowColor = index === 0 ? "#dbff52" : "#ff2bd6";
+    context.shadowBlur = 24 + comboBoost * 10;
+    context.lineWidth = 1.2;
+
+    for (let ring = 0; ring < 3; ring += 1) {
+      context.beginPath();
+      context.ellipse(0, 0, outerRadius * (1.2 + ring * 0.38), outerRadius * (0.46 + ring * 0.12), ring * 0.72, 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    context.globalAlpha = 1;
+    context.fillStyle = index === 0 ? "rgba(219, 255, 82, 0.24)" : "rgba(0, 245, 255, 0.18)";
+    context.beginPath();
+    context.arc(0, 0, outerRadius * 1.72, 0, Math.PI * 2);
+    context.fill();
+
+    const starGradient = context.createRadialGradient(-outerRadius * 0.22, -outerRadius * 0.25, 0, 0, 0, outerRadius);
+    starGradient.addColorStop(0, "#ffffff");
+    starGradient.addColorStop(0.3, index === 0 ? "#dbff52" : "#00f5ff");
+    starGradient.addColorStop(1, "#ff2bd6");
+    context.fillStyle = starGradient;
+    context.shadowBlur = 32 + comboBoost * 10;
+    context.beginPath();
+
+    for (let point = 0; point < 12; point += 1) {
+      const radius = point % 2 === 0 ? outerRadius : innerRadius;
+      const angle = -Math.PI / 2 + (point * Math.PI) / 6;
+      const x = Math.cos(angle) * radius;
+      const y = Math.sin(angle) * radius;
+
+      if (point === 0) {
+        context.moveTo(x, y);
+      } else {
+        context.lineTo(x, y);
+      }
+    }
+
+    context.closePath();
+    context.fill();
+    context.restore();
   }
 
-  context.closePath();
-  context.fill();
   context.restore();
 }
 
@@ -761,6 +841,7 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
   const cellGap = Math.max(2, grid.cellSize * 0.12);
   const segmentSize = grid.cellSize - cellGap * 2;
   const isGameOver = phase === "gameOver";
+  const comboBoost = snapshot.isComboUnlocked ? Math.min(1, Math.max(0, (snapshot.comboMultiplier - 1) / 3)) : 0;
 
   drawSnakePathGlow(context, grid, snake, time);
 
@@ -778,11 +859,11 @@ function drawSnake(context: CanvasRenderingContext2D, snapshot: GameSnapshot, ti
     const age = snake.length <= 1 ? 1 : 1 - index / (snake.length - 1);
     const x = grid.offsetX + segment.column * grid.cellSize + cellGap;
     const y = grid.offsetY + segment.row * grid.cellSize + cellGap;
-    const pulse = 0.72 + Math.sin(time * 5.2 + index * 0.55) * 0.28;
+    const pulse = 0.72 + Math.sin(time * (5.2 + comboBoost * 0.9) + index * 0.55) * 0.28;
 
     context.globalAlpha = isGameOver ? 0.56 : 0.78 + age * 0.22;
     context.shadowColor = isHead ? "#dbff52" : "#00f5ff";
-    context.shadowBlur = isHead ? 30 : 17 + pulse * 8;
+    context.shadowBlur = isHead ? 30 + comboBoost * 10 : 17 + pulse * 8 + comboBoost * 4;
 
     if (isHead) {
       const headGradient = context.createRadialGradient(
@@ -1088,6 +1169,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       context.clearRect(0, 0, size.width, size.height);
 
       drawBackground(context, size, time);
+      drawComboPulseOverlay(context, size, frame.snapshot, time);
       drawStars(context, size, stars, time);
       drawCoreGlow(context, size, time);
       drawGrid(context, size, time);

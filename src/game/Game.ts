@@ -1,5 +1,7 @@
 import { createAudioController, type AudioController } from "./audio";
 import { createInputController } from "./input";
+import { DEFAULT_SAFE_SPAWN_CONFIG, getUnlockedFeatures as computeUnlockedFeatures, type GameProgress, type UnlockedFeatures } from "./progression";
+import { findSafeSpawnPosition } from "./spawn";
 import { createRenderer } from "./render";
 import { readHighScore, writeHighScore } from "./storage";
 import type {
@@ -47,6 +49,9 @@ const STEP_MS = 120;
 const BOOST_STEP_MS = 72;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
+const COMBO_MAX_TIMER_MS = 4000;
+const COMBO_MAX_COUNT = 99;
+const COMBO_UNLOCKED_CAP_MULTIPLIER = 4;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
 const MIN_ROWS = 10;
@@ -109,13 +114,21 @@ export class Game {
   private phase: GamePhase = "ready";
   private grid: GridMetrics;
   private snake: GridCell[] = [];
-  private food: GridCell | null = null;
+  private foods: GridCell[] = [];
   private direction: Direction = "right";
   private nextDirection: Direction = "right";
   private score = 0;
+  private coresEaten = 0;
+  private comboCount = 0;
+  private comboMultiplier = 1;
+  private comboTimer = 0;
+  private comboMaxTimer = COMBO_MAX_TIMER_MS;
+  private lastCoreEatTime = 0;
+  private isComboUnlocked = false;
   private highScore: number;
   private frameId: number | null = null;
   private elapsed = 0;
+  private playElapsed = 0;
   private stepAccumulator = 0;
   private lastFrameTime = 0;
   private lastUiUpdate = 0;
@@ -177,6 +190,9 @@ export class Game {
     this.elapsed += delta;
 
     if (this.phase === "playing") {
+      this.playElapsed += delta;
+      this.refreshComboUnlockState();
+      this.tickComboTimer(delta);
       this.stepAccumulator += delta;
       const stepMs = this.isBoosting ? BOOST_STEP_MS : STEP_MS;
 
@@ -307,12 +323,20 @@ export class Game {
   private resetRun(phase: GamePhase): void {
     this.phase = phase;
     this.score = 0;
+    this.coresEaten = 0;
+    this.comboCount = 0;
+    this.comboMultiplier = 1;
+    this.comboTimer = 0;
+    this.comboMaxTimer = COMBO_MAX_TIMER_MS;
+    this.lastCoreEatTime = 0;
+    this.isComboUnlocked = false;
     this.direction = "right";
     this.nextDirection = "right";
     this.isBoosting = false;
     this.stepAccumulator = 0;
+    this.playElapsed = 0;
     this.snake = this.createStartingSnake();
-    this.food = this.createFood();
+    this.foods = this.createFoods();
     this.syncUi(true);
   }
 
@@ -326,23 +350,41 @@ export class Game {
     }));
   }
 
-  private createFood(): GridCell | null {
-    const occupied = new Set(this.snake.map((cell) => `${cell.column}:${cell.row}`));
-    const availableCells: GridCell[] = [];
+  private createFoods(): GridCell[] {
+    const foods: GridCell[] = [];
 
-    for (let row = 0; row < this.grid.rows; row += 1) {
-      for (let column = 0; column < this.grid.columns; column += 1) {
-        if (!occupied.has(`${column}:${row}`)) {
-          availableCells.push({ column, row });
-        }
+    while (foods.length < 2) {
+      const candidate = this.spawnFood(foods);
+
+      if (!candidate) {
+        break;
       }
+
+      foods.push(candidate);
     }
 
-    if (availableCells.length === 0) {
-      return null;
-    }
+    return foods;
+  }
 
-    return availableCells[Math.floor(Math.random() * availableCells.length)] ?? null;
+  private spawnFood(extraBlocked: readonly GridCell[] = []): GridCell | null {
+    return findSafeSpawnPosition(this.grid, {
+      ...DEFAULT_SAFE_SPAWN_CONFIG,
+      wallPadding: 0,
+      snakeHeadRadius: 0,
+      occupiedCells: [...this.snake, ...this.foods, ...extraBlocked],
+    });
+  }
+
+  private refillFoods(): void {
+    while (this.foods.length < 2) {
+      const candidate = this.spawnFood();
+
+      if (!candidate) {
+        break;
+      }
+
+      this.foods.push(candidate);
+    }
   }
 
   private advanceSnake(): void {
@@ -360,7 +402,8 @@ export class Game {
       column: head.column + delta.column,
       row: head.row + delta.row,
     };
-    const ateFood = this.food !== null && cellsMatch(nextHead, this.food);
+    const ateFoodIndex = this.foods.findIndex((food) => cellsMatch(nextHead, food));
+    const ateFood = ateFoodIndex !== -1;
 
     if (this.isOutOfBounds(nextHead) || this.collidesWithSelf(nextHead, ateFood)) {
       this.endRun();
@@ -370,11 +413,13 @@ export class Game {
     this.snake = [nextHead, ...this.snake];
 
     if (ateFood) {
-      this.score += SCORE_PER_CORE;
-      this.food = this.createFood();
+      this.foods.splice(ateFoodIndex, 1);
+      this.coresEaten += 1;
+      this.handleCoreEat();
+      this.refillFoods();
       this.saveHighScoreIfNeeded();
 
-      if (!this.food) {
+      if (this.foods.length === 0) {
         this.endRun();
       }
 
@@ -382,6 +427,49 @@ export class Game {
     }
 
     this.snake.pop();
+  }
+
+  private handleCoreEat(): void {
+    const wasComboUnlocked = this.isComboUnlocked;
+    const timeSinceLastCore = this.lastCoreEatTime > 0 ? this.playElapsed - this.lastCoreEatTime : Number.POSITIVE_INFINITY;
+    const canContinueCombo = timeSinceLastCore <= this.comboMaxTimer;
+    const nextComboCount = canContinueCombo ? this.comboCount + 1 : 1;
+
+    this.comboCount = Math.min(COMBO_MAX_COUNT, nextComboCount);
+    this.comboMultiplier = this.getComboMultiplier(this.comboCount);
+    this.comboTimer = this.comboMaxTimer;
+    this.lastCoreEatTime = this.playElapsed;
+    this.refreshComboUnlockState();
+    this.score += SCORE_PER_CORE * (wasComboUnlocked ? this.comboMultiplier : 1);
+  }
+
+  private refreshComboUnlockState(): void {
+    if (this.isComboUnlocked) {
+      return;
+    }
+
+    const features = computeUnlockedFeatures(this.getProgress());
+    this.isComboUnlocked = features.combo;
+  }
+
+  private tickComboTimer(delta: number): void {
+    if (this.comboTimer <= 0) {
+      return;
+    }
+
+    this.comboTimer = Math.max(0, this.comboTimer - delta);
+
+    if (this.comboTimer === 0) {
+      this.comboCount = 0;
+      this.comboMultiplier = 1;
+    }
+  }
+
+  private getComboMultiplier(comboCount: number): number {
+    if (comboCount >= 10) return COMBO_UNLOCKED_CAP_MULTIPLIER;
+    if (comboCount >= 6) return 3;
+    if (comboCount >= 3) return 2;
+    return 1;
   }
 
   private collidesWithSelf(cell: GridCell, willGrow: boolean): boolean {
@@ -395,9 +483,9 @@ export class Game {
 
   private isCurrentPlacementValid(): boolean {
     const snakeIsValid = this.snake.every((segment) => !this.isOutOfBounds(segment));
-    const foodIsValid = this.food === null || !this.isOutOfBounds(this.food);
+    const foodsAreValid = this.foods.every((food) => !this.isOutOfBounds(food) && !this.snake.some((segment) => cellsMatch(segment, food)));
 
-    return snakeIsValid && foodIsValid;
+    return snakeIsValid && foodsAreValid;
   }
 
   private endRun(): void {
@@ -422,10 +510,28 @@ export class Game {
       phase: this.phase,
       grid: { ...this.grid },
       snake: this.snake.map((segment) => ({ ...segment })),
-      food: this.food ? { ...this.food } : null,
+      foods: this.foods.map((food) => ({ ...food })),
       score: this.score,
       highScore: this.highScore,
       direction: this.direction,
+      comboCount: this.comboCount,
+      comboMultiplier: this.comboMultiplier,
+      comboTimer: this.comboTimer,
+      comboMaxTimer: this.comboMaxTimer,
+      isComboUnlocked: this.isComboUnlocked,
+    };
+  }
+
+  public getUnlockedFeatures(): UnlockedFeatures {
+    return computeUnlockedFeatures(this.getProgress());
+  }
+
+  private getProgress(): GameProgress {
+    return {
+      snakeLength: this.snake.length,
+      coresEaten: this.coresEaten,
+      score: this.score,
+      elapsedTime: this.playElapsed / 1000
     };
   }
 
@@ -445,7 +551,13 @@ export class Game {
     this.ui.pauseButton.textContent = this.phase === "paused" ? ">" : "P";
     this.ui.pauseButton.setAttribute("aria-label", this.phase === "paused" ? "Resume" : "Pause");
     this.ui.scoreLabel.textContent = this.score.toString();
-    this.ui.comboLabel.textContent = "x1";
+    this.ui.comboPanel.dataset.unlocked = this.isComboUnlocked ? "true" : "false";
+    this.ui.comboLabel.textContent = this.isComboUnlocked ? `x${this.comboMultiplier}` : "Locked";
+    this.ui.comboCountLabel.textContent = this.isComboUnlocked ? `${this.comboCount} chain` : "0 chain";
+    this.ui.comboTimerLabel.textContent = this.isComboUnlocked ? `${Math.ceil(this.comboTimer / 1000)}s` : "--";
+    this.ui.comboTimerBar.style.width = this.isComboUnlocked && this.comboMaxTimer > 0
+      ? `${Math.max(0, Math.min(100, (this.comboTimer / this.comboMaxTimer) * 100))}%`
+      : "0%";
     this.ui.bestLabel.textContent = this.highScore.toString();
     this.ui.stateLabel.textContent = PHASE_LABELS[this.phase];
     this.ui.fpsLabel.textContent = `${this.lastFps || "--"} FPS`;

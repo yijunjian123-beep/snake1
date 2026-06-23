@@ -175,6 +175,81 @@ button {
     inset 0 0 16px rgba(0, 245, 255, 0.06);
 }
 
+.combo-chip {
+  display: grid;
+  gap: 4px;
+  min-width: 140px;
+  align-content: start;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease,
+    opacity 180ms ease;
+}
+
+.combo-chip strong {
+  margin-top: 0;
+}
+
+.combo-count,
+.combo-timer {
+  color: var(--muted);
+  font-size: 0.66rem;
+  line-height: 1;
+}
+
+.combo-meter {
+  position: relative;
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(143, 251, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.26);
+}
+
+.combo-meter span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--magenta), var(--lime), var(--cyan));
+  box-shadow: 0 0 12px rgba(219, 255, 82, 0.38);
+  transition: width 120ms linear;
+}
+
+.combo-chip[data-unlocked="false"] {
+  opacity: 0.76;
+}
+
+.combo-chip[data-unlocked="false"] .combo-count,
+.combo-chip[data-unlocked="false"] .combo-meter,
+.combo-chip[data-unlocked="false"] .combo-timer {
+  display: none;
+}
+
+.combo-chip[data-unlocked="true"] {
+  border-color: rgba(219, 255, 82, 0.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 0 16px rgba(0, 245, 255, 0.08),
+    0 0 22px rgba(219, 255, 82, 0.22),
+    0 0 34px rgba(0, 245, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
+    linear-gradient(135deg, rgba(16, 28, 48, 0.92), rgba(6, 12, 24, 0.74));
+  animation: combo-glow 1.8s ease-in-out infinite;
+}
+
+.combo-chip[data-unlocked="true"] strong {
+  color: var(--lime);
+  text-shadow: 0 0 12px rgba(219, 255, 82, 0.72);
+}
+
+.combo-chip[data-unlocked="true"] .combo-meter {
+  border-color: rgba(219, 255, 82, 0.38);
+}
+
 .stat-chip span,
 .diagnostic-strip span {
   display: block;
@@ -573,6 +648,19 @@ button {
   }
 }
 
+@keyframes combo-glow {
+  0%,
+  100% {
+    transform: translateY(0);
+    filter: brightness(1);
+  }
+
+  50% {
+    transform: translateY(-1px);
+    filter: brightness(1.08);
+  }
+}
+
 @media (max-width: 720px) {
   .hud-strip {
     align-items: stretch;
@@ -585,11 +673,22 @@ button {
 
   .status-cluster {
     flex: 1;
+    min-width: 0;
   }
 
   .stat-chip {
     min-width: 0;
     flex: 1;
+  }
+
+  .combo-chip {
+    min-width: 0;
+    flex: 1.2;
+  }
+
+  .combo-count,
+  .combo-timer {
+    font-size: 0.6rem;
   }
 
   .diagnostic-strip {
@@ -640,6 +739,12 @@ button {
     padding: 5px 6px;
   }
 
+  .combo-chip {
+    min-width: 84px;
+    padding: 5px 6px;
+    gap: 3px;
+  }
+
   .stat-chip span {
     font-size: 0.56rem;
   }
@@ -647,6 +752,11 @@ button {
   .stat-chip strong {
     margin-top: 3px;
     font-size: 0.84rem;
+  }
+
+  .combo-count,
+  .combo-timer {
+    font-size: 0.52rem;
   }
 
   .icon-button {
