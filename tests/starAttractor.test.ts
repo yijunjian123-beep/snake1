@@ -102,7 +102,7 @@ test("spawnStarAttractor only appears after unlock and keeps clear of the head l
   assert.equal(Math.max(Math.abs((attractor?.cell.column ?? 0) - 12), Math.abs((attractor?.cell.row ?? 0) - 8)) >= 4, true);
 });
 
-test("absorbing a star attractor does not advance the next attractor cycle", () => {
+test("star attractor flow stays disabled in the current build", () => {
   const harness = createGameHarness();
   const internals = harness.game as unknown as Record<string, unknown>;
 
@@ -145,15 +145,24 @@ test("absorbing a star attractor does not advance the next attractor cycle", () 
     internals.pendingGrowthSegments = 0;
     internals.playElapsed = 0;
 
+    assert.equal(internals.starAttractorEatCount, 4);
+    assert.equal(internals.starAttractorNeedIndex, 1);
+    assert.equal(internals.starAttractorNeed, 8);
+    assert.equal(internals.starAttractorEffects.length, 0);
+    assert.equal(internals.score, 0);
+    assert.equal(internals.coresEaten, 0);
+    assert.equal(internals.pendingGrowthSegments, 0);
+    assert.equal((internals.foods as GridCell[]).length, 3);
+
     (internals.absorbStarAttractor as (cell: GridCell, currentTime: number) => void)({ column: 6, row: 5 }, 12);
 
     assert.equal(internals.starAttractorEatCount, 4);
     assert.equal(internals.starAttractorNeedIndex, 1);
     assert.equal(internals.starAttractorNeed, 8);
-    assert.equal(internals.starAttractorEffects.length, 1);
-    assert.equal(internals.score, 30);
-    assert.equal(internals.coresEaten, 3);
-    assert.equal(internals.pendingGrowthSegments, 3);
+    assert.equal(internals.starAttractorEffects.length, 0);
+    assert.equal(internals.score, 0);
+    assert.equal(internals.coresEaten, 0);
+    assert.equal(internals.pendingGrowthSegments, 0);
     assert.equal((internals.foods as GridCell[]).length, 3);
   } finally {
     harness.cleanup();

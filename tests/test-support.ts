@@ -138,6 +138,10 @@ class FakeElement extends EventTarget {
     this.attributes.set(name, value);
   }
 
+  public getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+
   public removeAttribute(name: string): void {
     this.attributes.delete(name);
   }
