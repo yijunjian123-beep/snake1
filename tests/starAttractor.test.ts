@@ -122,10 +122,16 @@ test("star attractor flow stays disabled in the current build", () => {
     ];
     internals.starAttractors = [];
     internals.starAttractorEffects = [];
-    internals.starAttractorEatCount = 4;
-    internals.starAttractorNeedIndex = 1;
-    internals.starAttractorNeed = 8;
-    internals.starAttractorSpawnPending = false;
+    const spawnState = internals.spawn as {
+      starAttractorEatCount: number;
+      starAttractorNeedIndex: number;
+      starAttractorNeed: number;
+      starAttractorSpawnPending: boolean;
+    };
+    spawnState.starAttractorEatCount = 4;
+    spawnState.starAttractorNeedIndex = 1;
+    spawnState.starAttractorNeed = 8;
+    spawnState.starAttractorSpawnPending = false;
     internals.starBeasts = [];
     internals.starCores = [];
     internals.blackHoles = [
@@ -145,9 +151,9 @@ test("star attractor flow stays disabled in the current build", () => {
     internals.pendingGrowthSegments = 0;
     internals.playElapsed = 0;
 
-    assert.equal(internals.starAttractorEatCount, 4);
-    assert.equal(internals.starAttractorNeedIndex, 1);
-    assert.equal(internals.starAttractorNeed, 8);
+    assert.equal(spawnState.starAttractorEatCount, 4);
+    assert.equal(spawnState.starAttractorNeedIndex, 1);
+    assert.equal(spawnState.starAttractorNeed, 8);
     assert.equal(internals.starAttractorEffects.length, 0);
     assert.equal(internals.score, 0);
     assert.equal(internals.coresEaten, 0);
@@ -156,9 +162,9 @@ test("star attractor flow stays disabled in the current build", () => {
 
     (internals.absorbStarAttractor as (cell: GridCell, currentTime: number) => void)({ column: 6, row: 5 }, 12);
 
-    assert.equal(internals.starAttractorEatCount, 4);
-    assert.equal(internals.starAttractorNeedIndex, 1);
-    assert.equal(internals.starAttractorNeed, 8);
+    assert.equal(spawnState.starAttractorEatCount, 4);
+    assert.equal(spawnState.starAttractorNeedIndex, 1);
+    assert.equal(spawnState.starAttractorNeed, 8);
     assert.equal(internals.starAttractorEffects.length, 0);
     assert.equal(internals.score, 0);
     assert.equal(internals.coresEaten, 0);

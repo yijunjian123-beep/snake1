@@ -1,3 +1,4 @@
+import { FOOD_SPAWN_CONFIG } from "./foodSpawn";
 import { STAR_ATTRACTOR_CONFIG } from "./starAttractor";
 import type {
   EntityRuntimeState,
@@ -12,7 +13,6 @@ import type {
 
 const DEFAULT_LIVES = 3;
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
-const FOOD_WAVE_INTERVAL_MS = 5000;
 
 export function createLifecycleState(phase: RunLifecycleState["phase"] = "ready"): RunLifecycleState {
   return {
@@ -99,7 +99,7 @@ export function createSpawnState(): SpawnRuntimeState {
     starBeastNextSpawnCheckAt: 0,
     starBeastRespawnLockUntil: 0,
     foodWaveBag: [],
-    foodWaveNextSpawnAt: FOOD_WAVE_INTERVAL_MS,
+    foodWaveNextSpawnAt: FOOD_SPAWN_CONFIG.waveIntervalMs,
     nextStarAttractorId: 1,
     nextStarAttractorEffectId: 1,
     nextStarBeastId: 1,

@@ -1,38 +1,23 @@
-import { createAudioController, type AudioController } from "./audio";
+﻿import { createAudioController, type AudioController } from "./audio";
 import {
   getBlackHoleFoodAvoidRadiusCells,
-  getDesiredBlackHoleCount,
   isBlackHoleCollision,
   resolveBlackHoleAlert,
   resolveBlackHoleMovement,
-  chooseBlackHoleSpawnKind,
-  spawnBlackHole,
   type BlackHoleGravityState,
 } from "./blackHole";
 import { createInputController } from "./input";
+import { spawnFoodCell } from "./foodSpawn";
 import {
-  DEFAULT_SAFE_SPAWN_CONFIG,
   DEFAULT_UNLOCK_CONFIG,
   getUnlockedFeatures as computeUnlockedFeatures,
   type GameProgress,
   type UnlockedFeatures,
 } from "./progression";
-import { findReviveSpawnPlacement, findSafeSpawnPosition } from "./spawn";
+import { findReviveSpawnPlacement } from "./spawn";
 import type { ReviveSpawnPlacement } from "./spawn";
-import {
-  STAR_BEAST_CONFIG,
-  buildStarBeastDropCores,
-  chooseStarBeastDirection,
-  getDesiredStarBeastCount,
-  spawnStarBeast,
-  type StarBeastMoveContext,
-} from "./starBeast";
-import {
-  STAR_ATTRACTOR_CONFIG,
-  rollStarAttractorNeed,
-  spawnStarAttractor,
-} from "./starAttractor";
-import { DIRECTION_DELTAS, OPPOSITE_DIRECTIONS } from "./direction";
+import { rollStarAttractorNeed } from "./starAttractor";
+import { OPPOSITE_DIRECTIONS } from "./direction";
 import {
   type ActiveDirectionalInput,
   type ActiveSpeedInput,
@@ -42,7 +27,6 @@ import {
   type MovementSpeedState,
   type ProgressRuntimeState,
   type RunLifecycleState,
-  type SnakeAdvanceEvaluation,
   type SpeedCueState,
   type SpeedRuntimeState,
   type TimingRuntimeState,
@@ -51,9 +35,21 @@ import {
   type WallGraceState,
 } from "./gameState";
 import { createEntityState, createInputState, createLifecycleState, createMovementState, createProgressState, createSpawnState, createSpeedState, createTimingState, resetTimingState } from "./stateFactory";
-import { cellKey, cellsMatch, chebyshevDistance } from "./gridMath";
+import { cellsMatch } from "./gridMath";
 import { createRenderer } from "./render";
 import { readHighScore, writeHighScore } from "./storage";
+import { buildFoodSpawnContext, getReviveBlockedCells as buildReviveBlockedCells, isCurrentPlacementValid } from "./spawnRuntime";
+import {
+  getBlackHoleSpawnBlockedCells,
+  getBlackHoleSpawnDangerZones,
+  getStarCoreCells,
+} from "./spawnSelectors";
+import {
+  advanceStarAttractorSpawnSystem,
+  refreshBlackHoleSpawnSystem,
+  refreshStarBeastSpawnSystem,
+  retryPendingStarAttractorSpawnSystem,
+} from "./spawnSystems";
 import {
   applyTickerUiModel,
   applyUiSyncModel,
@@ -62,6 +58,19 @@ import {
   buildUiSyncModel,
   createUiSyncState,
 } from "./viewModel";
+import { runTransientSimulation, type TransientSimulationContext } from "./simulationPipeline";
+import {
+  canAdvanceDirection,
+  evaluateSnakeAdvance,
+  pickAdvanceDirection,
+  type SnakeMovementEvaluationContext,
+} from "./snakeMovementSystem";
+import {
+  updateFoodWaveSystem,
+  updateStarBeastEffectSystem,
+  updateStarCoreSystem,
+} from "./transientSystems";
+import { updateStarBeastSimulation } from "./starBeastSimulation";
 import type {
   BlackHole,
   BlackHoleCue,
@@ -82,7 +91,6 @@ import type {
   StarAttractorEffect,
   StarBeast,
   StarBeastEffect,
-  StarBeastDeathCause,
   StarCore,
   DeathReason,
   Unsubscribe,
@@ -96,7 +104,6 @@ interface GameOptions {
 }
 
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
-const BEAST_BASE_STEP_MS = BASE_STEP_MS;
 const BOOST_STEP_RATIO = 0.6;
 const ACCELERATE_SPEED_MULTIPLIER = 2.6 / 0.7 / 0.7;
 const BRAKE_SPEED_MULTIPLIER = 0.35;
@@ -105,13 +112,6 @@ const MAX_DIRECTION_QUEUE_LENGTH = 2;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
 const WALL_GRACE_MS = 110;
-const FOOD_NORMAL_CAP = 10;
-const FOOD_WAVE_INTERVAL_MS = 5000;
-const FOOD_WAVE_BAG_SINGLE_COUNT = 17;
-const FOOD_WAVE_BAG_CLUSTER_COUNT = 3;
-const FOOD_CLUSTER_MIN_COUNT = 3;
-const FOOD_CLUSTER_MAX_COUNT = 5;
-const FOOD_CLUSTER_RADIUS = 2;
 const REVIVE_COUNTDOWN_MS = 3000;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
@@ -122,13 +122,6 @@ const COMPACT_LANDSCAPE_TOP_MARGIN = 170;
 const SHORT_SCREEN_TOP_MARGIN = 112;
 const DEFAULT_HUD_GAP = 12;
 const COMPACT_LANDSCAPE_HUD_GAP = 10;
-
-type FoodWaveKind = "single" | "cluster";
-
-interface WeightedGridCell {
-  cell: GridCell;
-  weight: number;
-}
 
 function clampInteger(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)));
@@ -187,49 +180,6 @@ function directionFromAction(action: InputAction): Direction | null {
   }
 }
 
-function shuffleArray<T>(items: T[], random: () => number = Math.random): T[] {
-  for (let index = items.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
-    const current = items[index];
-    const swap = items[swapIndex];
-
-    if (current !== undefined && swap !== undefined) {
-      items[index] = swap;
-      items[swapIndex] = current;
-    }
-  }
-
-  return items;
-}
-
-function pickWeightedGridCell(cells: readonly WeightedGridCell[], random: () => number = Math.random): GridCell | null {
-  let totalWeight = 0;
-
-  for (const candidate of cells) {
-    totalWeight += Math.max(0, candidate.weight);
-  }
-
-  if (totalWeight <= 0) {
-    return null;
-  }
-
-  let remaining = random() * totalWeight;
-
-  for (const candidate of cells) {
-    remaining -= Math.max(0, candidate.weight);
-
-    if (remaining <= 0) {
-      return candidate.cell;
-    }
-  }
-
-  return cells[cells.length - 1]?.cell ?? null;
-}
-
-function rollDuration(min: number, max: number): number {
-  return min + Math.random() * (max - min);
-}
-
 export class Game {
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: GameUiElements;
@@ -251,6 +201,14 @@ export class Game {
   private spawn: SpawnRuntimeState = createSpawnState();
   private inputState: InputRuntimeState = createInputState();
   private uiSyncState: UiSyncState = createUiSyncState();
+  private readonly transientSimulationContext: TransientSimulationContext = {
+    getPhase: () => this.phase,
+    updateStarCores: (delta, currentTime) => this.updateStarCores(delta, currentTime),
+    updateFoodWaves: (currentTimeMs) => this.updateFoodWaves(currentTimeMs),
+    updateStarBeastEffects: (currentTime) => this.updateStarBeastEffects(currentTime),
+    updateStarBeasts: (delta) => this.updateStarBeasts(delta),
+    refreshStarBeasts: () => this.refreshStarBeastsInternal(),
+  };
 
   private get phase(): GamePhase {
     return this.lifecycle.phase;
@@ -572,108 +530,12 @@ export class Game {
     this.inputState.activeInputSequence = value;
   }
 
-  private get starAttractorEatCount(): number {
-    return this.spawn.starAttractorEatCount;
-  }
-
-  private set starAttractorEatCount(value: number) {
-    this.spawn.starAttractorEatCount = value;
-  }
-
-  private get starAttractorNeedIndex(): number {
-    return this.spawn.starAttractorNeedIndex;
-  }
-
-  private set starAttractorNeedIndex(value: number) {
-    this.spawn.starAttractorNeedIndex = value;
-  }
-
-  private get starAttractorNeed(): number {
-    return this.spawn.starAttractorNeed;
-  }
-
-  private set starAttractorNeed(value: number) {
-    this.spawn.starAttractorNeed = value;
-  }
-
-  private get starAttractorSpawnPending(): boolean {
-    return this.spawn.starAttractorSpawnPending;
-  }
-
-  private set starAttractorSpawnPending(value: boolean) {
-    this.spawn.starAttractorSpawnPending = value;
-  }
-
-  private get starBeastNextSpawnCheckAt(): number {
-    return this.spawn.starBeastNextSpawnCheckAt;
-  }
-
-  private set starBeastNextSpawnCheckAt(value: number) {
-    this.spawn.starBeastNextSpawnCheckAt = value;
-  }
-
-  private get starBeastRespawnLockUntil(): number {
-    return this.spawn.starBeastRespawnLockUntil;
-  }
-
-  private set starBeastRespawnLockUntil(value: number) {
-    this.spawn.starBeastRespawnLockUntil = value;
-  }
-
-  private get foodWaveBag(): FoodWaveKind[] {
-    return this.spawn.foodWaveBag;
-  }
-
-  private set foodWaveBag(value: FoodWaveKind[]) {
-    this.spawn.foodWaveBag = value;
-  }
-
-  private get foodWaveNextSpawnAt(): number {
-    return this.spawn.foodWaveNextSpawnAt;
-  }
-
-  private set foodWaveNextSpawnAt(value: number) {
-    this.spawn.foodWaveNextSpawnAt = value;
-  }
-
-  private get nextStarAttractorId(): number {
-    return this.spawn.nextStarAttractorId;
-  }
-
-  private set nextStarAttractorId(value: number) {
-    this.spawn.nextStarAttractorId = value;
-  }
-
   private get nextStarAttractorEffectId(): number {
     return this.spawn.nextStarAttractorEffectId;
   }
 
   private set nextStarAttractorEffectId(value: number) {
     this.spawn.nextStarAttractorEffectId = value;
-  }
-
-  private get nextStarBeastId(): number {
-    return this.spawn.nextStarBeastId;
-  }
-
-  private set nextStarBeastId(value: number) {
-    this.spawn.nextStarBeastId = value;
-  }
-
-  private get nextStarCoreId(): number {
-    return this.spawn.nextStarCoreId;
-  }
-
-  private set nextStarCoreId(value: number) {
-    this.spawn.nextStarCoreId = value;
-  }
-
-  private get nextStarBeastEffectId(): number {
-    return this.spawn.nextStarBeastEffectId;
-  }
-
-  private set nextStarBeastEffectId(value: number) {
-    this.spawn.nextStarBeastEffectId = value;
   }
 
   public constructor(options: GameOptions) {
@@ -763,9 +625,9 @@ export class Game {
           }
         }
 
-        if (this.phase === "playing") {
-          this.updateTransientEntities(delta);
-        }
+      if (this.phase === "playing") {
+        runTransientSimulation(this.transientSimulationContext, delta, this.playElapsed);
+      }
       }
     } else if (this.phase === "reviving") {
       this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
@@ -795,7 +657,16 @@ export class Game {
     const size = this.renderer.resize();
     this.grid = this.buildGrid(size);
 
-    if ((this.phase === "playing" || this.phase === "paused" || this.phase === "ready") && !this.isCurrentPlacementValid()) {
+    if ((this.phase === "playing" || this.phase === "paused" || this.phase === "ready") && !isCurrentPlacementValid({
+      grid: this.grid,
+      blackHoles: this.blackHoles,
+      snake: this.snake,
+      foods: this.foods,
+      starAttractors: this.starAttractors,
+      starBeasts: this.starBeasts,
+      starCores: this.starCores,
+      includeStarAttractors: STAR_ATTRACTOR_ENABLED,
+    })) {
       this.resetRun(this.phase === "paused" ? "paused" : this.phase);
     } else {
       this.rebuildSnakeOccupancy();
@@ -1222,14 +1093,15 @@ export class Game {
   }
 
   private getReviveBlockedCells(): GridCell[] {
-    return [
-      ...this.snake,
-      ...this.foods,
-      ...(STAR_ATTRACTOR_ENABLED ? this.starAttractors.map((attractor) => attractor.cell) : []),
-      ...this.starBeasts.flatMap((beast) => beast.body),
-      ...this.starCores.map((core) => ({ column: Math.floor(core.x), row: Math.floor(core.y) })),
-      ...this.blackHoles.map((blackHole) => blackHole.cell),
-    ];
+    return buildReviveBlockedCells({
+      blackHoles: this.blackHoles,
+      snake: this.snake,
+      foods: this.foods,
+      starAttractors: this.starAttractors,
+      starBeasts: this.starBeasts,
+      starCores: this.starCores,
+      includeStarAttractors: STAR_ATTRACTOR_ENABLED,
+    });
   }
 
   private createStartingSnake(): GridCell[] {
@@ -1259,24 +1131,17 @@ export class Game {
   }
 
   private spawnFood(extraBlocked: readonly GridCell[] = []): GridCell | null {
-    return findSafeSpawnPosition(this.grid, {
-      ...DEFAULT_SAFE_SPAWN_CONFIG,
-      wallPadding: 0,
-      snakeHeadRadius: 0,
-      occupiedCells: [
-        ...this.snake,
-        ...this.foods,
-        ...(STAR_ATTRACTOR_ENABLED ? this.starAttractors.map((attractor) => attractor.cell) : []),
-        ...this.starBeasts.flatMap((beast) => beast.body),
-        ...this.starCores.map((core) => ({ column: Math.floor(core.x), row: Math.floor(core.y) })),
-        ...this.blackHoles.map((blackHole) => blackHole.cell),
-        ...extraBlocked,
-      ],
-      dangerZones: this.blackHoles.map((blackHole) => ({
-        center: blackHole.cell,
-        radius: getBlackHoleFoodAvoidRadiusCells(blackHole),
-      })),
-    });
+    return spawnFoodCell(buildFoodSpawnContext({
+      grid: this.grid,
+      blackHoles: this.blackHoles,
+      snake: this.snake,
+      foods: this.foods,
+      starAttractors: this.starAttractors,
+      starBeasts: this.starBeasts,
+      starCores: this.starCores,
+      includeStarAttractors: STAR_ATTRACTOR_ENABLED,
+      extraBlockedCells: extraBlocked,
+    }));
   }
 
   private refillFoods(): void {
@@ -1289,260 +1154,6 @@ export class Game {
 
       this.foods.push(candidate);
     }
-  }
-
-  // Keep the immediate 3-food safety floor, then let the timed wave top the board up toward 10.
-  private updateFoodWaves(currentTimeMs: number): void {
-    while (currentTimeMs >= this.foodWaveNextSpawnAt) {
-      if (this.foods.length < FOOD_NORMAL_CAP) {
-        const spawnedFoods = this.spawnFoodWave();
-
-        if (spawnedFoods.length > 0) {
-          this.foods.push(...spawnedFoods);
-        }
-      }
-
-      this.foodWaveNextSpawnAt += FOOD_WAVE_INTERVAL_MS;
-    }
-  }
-
-  private spawnFoodWave(): GridCell[] {
-    if (this.foods.length >= FOOD_NORMAL_CAP) {
-      return [];
-    }
-
-    const waveKind = this.peekFoodWaveKind();
-
-    if (waveKind === "single") {
-      const singleFood = this.spawnFood();
-
-      if (!singleFood) {
-        return [];
-      }
-
-      this.consumeFoodWaveKind();
-      return [singleFood];
-    }
-
-    const availableSlots = FOOD_NORMAL_CAP - this.foods.length;
-    const targetCount = Math.min(
-      availableSlots,
-      FOOD_CLUSTER_MIN_COUNT + Math.floor(Math.random() * (FOOD_CLUSTER_MAX_COUNT - FOOD_CLUSTER_MIN_COUNT + 1)),
-    );
-    const clusterFoods = this.spawnClusterFoods(targetCount);
-
-    if (clusterFoods.length > 0) {
-      this.consumeFoodWaveKind();
-      return clusterFoods;
-    }
-
-    const fallbackFood = this.spawnFood();
-    if (!fallbackFood) {
-      return [];
-    }
-
-    this.consumeFoodWaveKind();
-    return [fallbackFood];
-  }
-
-  private peekFoodWaveKind(): FoodWaveKind {
-    if (this.foodWaveBag.length === 0) {
-      this.refillFoodWaveBag();
-    }
-
-    return this.foodWaveBag[this.foodWaveBag.length - 1] ?? "single";
-  }
-
-  private consumeFoodWaveKind(): void {
-    if (this.foodWaveBag.length === 0) {
-      this.refillFoodWaveBag();
-    }
-
-    this.foodWaveBag.pop();
-  }
-
-  private refillFoodWaveBag(): void {
-    // 17 single spawns, 3 cluster spawns, then reshuffle.
-    const bag: FoodWaveKind[] = [
-      ...Array.from({ length: FOOD_WAVE_BAG_SINGLE_COUNT }, () => "single" as const),
-      ...Array.from({ length: FOOD_WAVE_BAG_CLUSTER_COUNT }, () => "cluster" as const),
-    ];
-
-    this.foodWaveBag = shuffleArray(bag);
-  }
-
-  private spawnClusterFoods(maxCount: number): GridCell[] {
-    if (maxCount <= 0) {
-      return [];
-    }
-
-    const candidates = this.getFoodSpawnCandidates();
-
-    if (candidates.length === 0) {
-      return [];
-    }
-
-    const candidateKeys = new Set(candidates.map((cell) => cellKey(cell)));
-    const weightedAnchors = candidates
-      .map((cell) => ({
-        cell,
-        weight: this.getFoodClusterAnchorWeight(cell, candidateKeys),
-      }))
-      .filter((candidate) => candidate.weight > 0);
-    const anchor = pickWeightedGridCell(weightedAnchors);
-
-    if (!anchor) {
-      return [];
-    }
-
-    const clusterCandidates = this.getClusterFoodsAroundAnchor(anchor, candidateKeys);
-    return clusterCandidates.slice(0, maxCount);
-  }
-
-  private getFoodSpawnCandidates(extraBlocked: readonly GridCell[] = []): GridCell[] {
-    const occupied = new Set<string>();
-
-    for (const cell of this.snake) {
-      occupied.add(cellKey(cell));
-    }
-
-    for (const cell of this.foods) {
-      occupied.add(cellKey(cell));
-    }
-
-    if (STAR_ATTRACTOR_ENABLED) {
-      for (const attractor of this.starAttractors) {
-        occupied.add(cellKey(attractor.cell));
-      }
-    }
-
-    for (const beast of this.starBeasts) {
-      for (const segment of beast.body) {
-        occupied.add(cellKey(segment));
-      }
-    }
-
-    for (const core of this.starCores) {
-      occupied.add(cellKey({ column: Math.floor(core.x), row: Math.floor(core.y) }));
-    }
-
-    for (const blackHole of this.blackHoles) {
-      occupied.add(cellKey(blackHole.cell));
-    }
-
-    for (const cell of extraBlocked) {
-      occupied.add(cellKey(cell));
-    }
-
-    const candidates: GridCell[] = [];
-
-    for (let row = 0; row < this.grid.rows; row += 1) {
-      for (let column = 0; column < this.grid.columns; column += 1) {
-        const cell = { column, row };
-
-        if (occupied.has(cellKey(cell))) {
-          continue;
-        }
-
-        if (this.isBlockedByBlackHoleFoodZone(cell)) {
-          continue;
-        }
-
-        candidates.push(cell);
-      }
-    }
-
-    return candidates;
-  }
-
-  private isBlockedByBlackHoleFoodZone(cell: GridCell): boolean {
-    return this.blackHoles.some((blackHole) => chebyshevDistance(cell, blackHole.cell) <= getBlackHoleFoodAvoidRadiusCells(blackHole));
-  }
-
-  private getFoodClusterAnchorWeight(cell: GridCell, candidateKeys: Set<string>): number {
-    const capacity = this.getFoodClusterCapacity(cell, candidateKeys);
-    let proximityBonus = 1;
-
-    for (const blackHole of this.blackHoles) {
-      const forbiddenRadius = getBlackHoleFoodAvoidRadiusCells(blackHole);
-      const distance = chebyshevDistance(cell, blackHole.cell);
-
-      if (distance <= forbiddenRadius) {
-        continue;
-      }
-
-      const gap = distance - forbiddenRadius;
-
-      if (gap <= 1) {
-        proximityBonus = Math.max(proximityBonus, 9);
-      } else if (gap === 2) {
-        proximityBonus = Math.max(proximityBonus, 6);
-      } else if (gap === 3) {
-        proximityBonus = Math.max(proximityBonus, 4);
-      } else if (gap === 4) {
-        proximityBonus = Math.max(proximityBonus, 2);
-      }
-    }
-
-    return Math.max(1, capacity) * proximityBonus;
-  }
-
-  private getFoodClusterCapacity(center: GridCell, candidateKeys: Set<string>): number {
-    let capacity = 0;
-
-    for (let row = center.row - FOOD_CLUSTER_RADIUS; row <= center.row + FOOD_CLUSTER_RADIUS; row += 1) {
-      for (let column = center.column - FOOD_CLUSTER_RADIUS; column <= center.column + FOOD_CLUSTER_RADIUS; column += 1) {
-        if (column < 0 || row < 0 || column >= this.grid.columns || row >= this.grid.rows) {
-          continue;
-        }
-
-        const cell = { column, row };
-
-        if (!candidateKeys.has(cellKey(cell))) {
-          continue;
-        }
-
-        capacity += 1;
-      }
-    }
-
-    return capacity;
-  }
-
-  private getClusterFoodsAroundAnchor(anchor: GridCell, candidateKeys: Set<string>): GridCell[] {
-    const scored: Array<{ cell: GridCell; distance: number; manhattan: number }> = [];
-
-    for (let row = anchor.row - FOOD_CLUSTER_RADIUS; row <= anchor.row + FOOD_CLUSTER_RADIUS; row += 1) {
-      for (let column = anchor.column - FOOD_CLUSTER_RADIUS; column <= anchor.column + FOOD_CLUSTER_RADIUS; column += 1) {
-        if (column < 0 || row < 0 || column >= this.grid.columns || row >= this.grid.rows) {
-          continue;
-        }
-
-        const cell = { column, row };
-
-        if (!candidateKeys.has(cellKey(cell))) {
-          continue;
-        }
-
-        const dx = Math.abs(column - anchor.column);
-        const dy = Math.abs(row - anchor.row);
-
-        scored.push({
-          cell,
-          distance: Math.max(dx, dy),
-          manhattan: dx + dy,
-        });
-      }
-    }
-
-    scored.sort((left, right) => (
-      left.distance - right.distance ||
-      left.manhattan - right.manhattan ||
-      left.cell.row - right.cell.row ||
-      left.cell.column - right.cell.column
-    ));
-
-    return scored.map((entry) => entry.cell);
   }
 
   private advanceSnake(): void {
@@ -1621,7 +1232,7 @@ export class Game {
     }
 
     const currentTime = this.elapsed / 1000;
-    const evaluation = this.evaluateSnakeAdvance(this.direction);
+    const evaluation = evaluateSnakeAdvance(this.createSnakeMovementEvaluationContext(), this.direction);
 
     if (!evaluation) {
       this.finishGameOver("unknown");
@@ -1711,90 +1322,40 @@ export class Game {
   }
 
   private advanceStarAttractorProgress(amount: number, currentTime: number): void {
-    if (!STAR_ATTRACTOR_ENABLED) {
-      return;
-    }
-
-    if (amount <= 0) {
-      return;
-    }
-
-    if (this.getProgress().snakeLength < STAR_ATTRACTOR_CONFIG.unlockLength) {
-      return;
-    }
-
-    if (this.starAttractors.length > 0 || this.starAttractorSpawnPending) {
-      return;
-    }
-
-    this.starAttractorEatCount = Math.min(this.starAttractorNeed, this.starAttractorEatCount + amount);
-
-    if (this.starAttractorEatCount < this.starAttractorNeed) {
-      return;
-    }
-
-    if (this.trySpawnStarAttractor(currentTime)) {
-      this.starAttractorEatCount = 0;
-      this.starAttractorSpawnPending = false;
-      this.starAttractorNeedIndex = (this.starAttractorNeedIndex + 1) % STAR_ATTRACTOR_CONFIG.thresholdRanges.length;
-      this.starAttractorNeed = rollStarAttractorNeed(this.starAttractorNeedIndex);
-      return;
-    }
-
-    this.starAttractorSpawnPending = true;
+    advanceStarAttractorSpawnSystem(
+      {
+        enabled: STAR_ATTRACTOR_ENABLED,
+        grid: this.grid,
+        progress: this.getProgress(),
+        snake: this.snake,
+        direction: this.direction,
+        foods: this.foods,
+        starCoreCells: getStarCoreCells(this.starCores),
+        existingBlackHoles: this.blackHoles,
+        existingStarAttractors: this.starAttractors,
+        existingStarBeasts: this.starBeasts,
+        currentTime,
+        state: this.spawn,
+      },
+      amount,
+    );
   }
 
   private retryPendingStarAttractorSpawn(currentTime: number): void {
-    if (!STAR_ATTRACTOR_ENABLED) {
-      return;
-    }
-
-    if (!this.starAttractorSpawnPending) {
-      return;
-    }
-
-    if (this.starAttractors.length > 0 || this.getProgress().snakeLength < STAR_ATTRACTOR_CONFIG.unlockLength) {
-      return;
-    }
-
-    if (this.trySpawnStarAttractor(currentTime)) {
-      this.starAttractorEatCount = 0;
-      this.starAttractorSpawnPending = false;
-      this.starAttractorNeedIndex = (this.starAttractorNeedIndex + 1) % STAR_ATTRACTOR_CONFIG.thresholdRanges.length;
-      this.starAttractorNeed = rollStarAttractorNeed(this.starAttractorNeedIndex);
-    }
-  }
-
-  private trySpawnStarAttractor(currentTime: number): boolean {
-    if (!STAR_ATTRACTOR_ENABLED) {
-      return false;
-    }
-
-    if (this.starAttractors.length >= STAR_ATTRACTOR_CONFIG.maxOnBoard) {
-      return false;
-    }
-
-    const progress = this.getProgress();
-    const nextStarAttractor = spawnStarAttractor({
+    retryPendingStarAttractorSpawnSystem({
+      enabled: STAR_ATTRACTOR_ENABLED,
       grid: this.grid,
-      progress,
+      progress: this.getProgress(),
       snake: this.snake,
       direction: this.direction,
       foods: this.foods,
-      starCoreCells: this.getStarCoreCells(),
+      starCoreCells: getStarCoreCells(this.starCores),
       existingBlackHoles: this.blackHoles,
       existingStarAttractors: this.starAttractors,
       existingStarBeasts: this.starBeasts,
       currentTime,
+      state: this.spawn,
     });
-
-    if (!nextStarAttractor) {
-      return false;
-    }
-
-    nextStarAttractor.id = this.nextStarAttractorId++;
-    this.starAttractors.push(nextStarAttractor);
-    return true;
   }
 
   private absorbStarAttractor(attractorCell: GridCell, currentTime: number): void {
@@ -1832,208 +1393,108 @@ export class Game {
   }
 
   private refreshBlackHoles(): void {
-    const desiredCount = getDesiredBlackHoleCount(this.getProgress());
-    const starBeastBodies = this.starBeasts.flatMap((beast) => beast.body);
-    const starAttractorCells = STAR_ATTRACTOR_ENABLED ? this.starAttractors.map((attractor) => attractor.cell) : [];
-    const starCoreCells = this.starCores.map((core) => ({ column: Math.floor(core.x), row: Math.floor(core.y) }));
-    const random = Math.random;
-
-    while (this.blackHoles.length < desiredCount) {
-      const nextKind = chooseBlackHoleSpawnKind(
-        this.blackHoles.map((blackHole) => blackHole.kind),
-        desiredCount,
-        random,
-      );
-      const nextBlackHole = spawnBlackHole({
-        grid: this.grid,
-        progress: this.getProgress(),
-        snake: this.snake,
-        foods: this.foods,
-        existingBlackHoles: this.blackHoles,
-        birthCell: this.birthCell,
-        currentTime: this.elapsed / 1000,
-        futureBlockedCells: [...starBeastBodies, ...starAttractorCells, ...starCoreCells],
-        futureDangerZones: this.starBeasts.map((beast) => ({
-          center: beast.body[0] ?? this.birthCell,
-          radius: Math.max(3, Math.ceil(beast.length * 0.45)),
-        })),
-        kind: nextKind,
-        random,
-      });
-
-      if (!nextBlackHole) {
-        break;
-      }
-
-      this.blackHoles.push(nextBlackHole);
-    }
-  }
-
-  private refreshStarBeasts(): void {
-    if (this.phase !== "playing") {
-      return;
-    }
-
-    if (this.starCores.length >= STAR_BEAST_CONFIG.maxDroppedCoresOnMap) {
-      return;
-    }
-
-    const currentTime = this.playElapsed / 1000;
-
-    if (currentTime < this.starBeastRespawnLockUntil || currentTime < this.starBeastNextSpawnCheckAt) {
-      return;
-    }
-
-    const progress = this.getProgress();
-    const desiredCount = getDesiredStarBeastCount(progress);
-
-    if (desiredCount <= 0) {
-      return;
-    }
-
-    const aliveCount = this.starBeasts.filter((beast) => beast.alive).length;
-
-    if (aliveCount >= desiredCount) {
-      this.starBeastNextSpawnCheckAt = currentTime + STAR_BEAST_CONFIG.spawnCheckIntervalMs / 1000;
-      return;
-    }
-
-    const nextStarBeast = spawnStarBeast({
+    refreshBlackHoleSpawnSystem({
       grid: this.grid,
-      progress,
+      progress: this.getProgress(),
       snake: this.snake,
       foods: this.foods,
-      starCoreCells: this.getStarCoreCells(),
+      birthCell: this.birthCell,
+      currentTime: this.elapsed / 1000,
+      existingBlackHoles: this.blackHoles,
+      futureBlockedCells: getBlackHoleSpawnBlockedCells({
+        starBeasts: this.starBeasts,
+        starAttractors: this.starAttractors,
+        starCores: this.starCores,
+        includeStarAttractors: STAR_ATTRACTOR_ENABLED,
+      }),
+      futureDangerZones: getBlackHoleSpawnDangerZones({
+        starBeasts: this.starBeasts,
+        birthCell: this.birthCell,
+      }),
+    });
+  }
+
+  private refreshStarBeastsInternal(): void {
+    refreshStarBeastSpawnSystem({
+      phase: this.phase,
+      grid: this.grid,
+      progress: this.getProgress(),
+      snake: this.snake,
+      foods: this.foods,
+      starCoreCells: getStarCoreCells(this.starCores),
       existingBlackHoles: this.blackHoles,
       existingStarBeasts: this.starBeasts,
-      currentTime,
+      currentTime: this.playElapsed / 1000,
+      state: this.spawn,
     });
-
-    if (nextStarBeast) {
-      nextStarBeast.id = this.nextStarBeastId++;
-      this.starBeasts.push(nextStarBeast);
-    }
-
-    this.starBeastNextSpawnCheckAt = currentTime + STAR_BEAST_CONFIG.spawnCheckIntervalMs / 1000;
   }
 
-  private updateTransientEntities(delta: number): void {
-    if (this.phase !== "playing") {
-      return;
-    }
-
-    const currentTime = this.playElapsed / 1000;
-    this.updateStarCores(delta, currentTime);
-    if (this.phase !== "playing") {
-      return;
-    }
-
-    this.updateFoodWaves(this.playElapsed);
-    if (this.phase !== "playing") {
-      return;
-    }
-
-    this.updateStarBeastEffects(currentTime);
-    this.updateStarBeasts(delta);
-    this.refreshStarBeasts();
+  public updateStarCores(delta: number, currentTime: number): void {
+    updateStarCoreSystem({
+      delta,
+      currentTime,
+      grid: this.grid,
+      snake: this.snake,
+      foods: this.foods,
+      starCores: this.starCores,
+      extendSnakeByOne: () => this.extendSnakeByOne(),
+      handleCoreCollection: (time, amount, advancesStarAttractorProgress, rewardBurstOrigin) => {
+        this.handleCoreCollection(time, amount, advancesStarAttractorProgress, rewardBurstOrigin);
+      },
+      endRun: () => this.endRun(),
+    });
   }
 
-  private updateStarCores(delta: number, currentTime: number): void {
-    if (this.starCores.length === 0) {
-      return;
-    }
+  public updateFoodWaves(currentTimeMs: number): void {
+    updateFoodWaveSystem({
+      context: buildFoodSpawnContext({
+        grid: this.grid,
+        blackHoles: this.blackHoles,
+        snake: this.snake,
+        foods: this.foods,
+        starAttractors: this.starAttractors,
+        starBeasts: this.starBeasts,
+        starCores: this.starCores,
+        includeStarAttractors: STAR_ATTRACTOR_ENABLED,
+      }),
+      foods: this.foods,
+      state: this.spawn,
+      currentTimeMs,
+    });
+  }
 
-    const dt = Math.min(delta / 1000, 0.05);
-    const dragExponent = delta / 16.67;
-    const head = this.snake[0];
-    const playerCenter = head
-      ? {
-          x: head.column + 0.5,
-          y: head.row + 0.5,
-        }
-      : null;
+  public updateStarBeastEffects(currentTime: number): void {
+    updateStarBeastEffectSystem({
+      currentTime,
+      starBeastEffects: this.starBeastEffects,
+    });
+  }
 
-    for (let index = this.starCores.length - 1; index >= 0; index -= 1) {
-      const core = this.starCores[index];
+  public updateStarBeasts(stepMs: number): void {
+    updateStarBeastSimulation({
+      grid: this.grid,
+      snake: this.snake,
+      playerDirection: this.direction,
+      foods: this.foods,
+      blackHoles: this.blackHoles,
+      starBeasts: this.starBeasts,
+      starCores: this.starCores,
+      starBeastEffects: this.starBeastEffects,
+      spawnState: this.spawn,
+      birthCell: this.birthCell,
+      stepMs,
+      currentTime: this.playElapsed / 1000,
+      blackHoleCollisionTime: this.elapsed / 1000,
+      baseStepMs: BASE_STEP_MS,
+      getPhase: () => this.phase,
+      isOutOfBounds: (cell) => this.isOutOfBounds(cell),
+      collidesWithPlayerBody: (cell) => this.collidesWithPlayerBody(cell),
+      handlePlayerDeath: (reason) => this.handlePlayerDeath(reason),
+    });
+  }
 
-      if (!core) {
-        continue;
-      }
-
-      const ageMs = currentTime * 1000 - core.spawnTime * 1000;
-      const rewardBurstOrigin = core.burstOrigin
-        ? (head ? { ...head } : null)
-        : { column: Math.floor(core.x), row: Math.floor(core.y) };
-
-      if (ageMs >= core.lifetimeMs) {
-        this.starCores.splice(index, 1);
-        continue;
-      }
-
-      if (playerCenter) {
-        const dx = playerCenter.x - core.x;
-        const dy = playerCenter.y - core.y;
-        const distance = Math.hypot(dx, dy);
-        const magnetReady = ageMs >= core.magnetDelayMs;
-
-        if (distance <= 0.36) {
-          this.starCores.splice(index, 1);
-          this.extendSnakeByOne();
-          this.handleCoreCollection(currentTime, 1, false, rewardBurstOrigin);
-
-          if (this.foods.length === 0 && this.starCores.length === 0) {
-            this.endRun();
-            return;
-          }
-
-          continue;
-        }
-
-        if (magnetReady && distance <= core.magnetRadius) {
-          const pull = Math.min(1, 1 - distance / Math.max(0.001, core.magnetRadius));
-          const pullStrength = 4.5 + pull * 8;
-          core.vx += dx * pullStrength * dt;
-          core.vy += dy * pullStrength * dt;
-        } else {
-          const swirl = 0.18 + Math.sin(currentTime * 6.3 + core.id * 0.11) * 0.06;
-          core.vx += Math.sin(currentTime * 2.4 + core.id * 0.17) * swirl * dt;
-          core.vy += Math.cos(currentTime * 2.1 + core.id * 0.13) * swirl * dt;
-        }
-      }
-
-      const drag = ageMs < core.magnetDelayMs ? 0.98 : 0.94;
-      const dragFactor = Math.pow(drag, dragExponent);
-      core.vx *= dragFactor;
-      core.vy *= dragFactor;
-
-      const maxSpeed = ageMs < core.magnetDelayMs ? 0.9 : 2.4;
-      const speed = Math.hypot(core.vx, core.vy);
-
-      if (speed > maxSpeed) {
-        const scale = maxSpeed / Math.max(0.001, speed);
-        core.vx *= scale;
-        core.vy *= scale;
-      }
-
-      core.x += core.vx * dt;
-      core.y += core.vy * dt;
-      core.x = Math.max(0.35, Math.min(this.grid.columns - 0.35, core.x));
-      core.y = Math.max(0.35, Math.min(this.grid.rows - 0.35, core.y));
-
-      if (playerCenter) {
-        const distance = Math.hypot(playerCenter.x - core.x, playerCenter.y - core.y);
-
-        if (distance <= 0.36) {
-          this.starCores.splice(index, 1);
-          this.handleCoreCollection(currentTime, 1, false, rewardBurstOrigin);
-
-          if (this.foods.length === 0 && this.starCores.length === 0) {
-            this.endRun();
-            return;
-          }
-        }
-      }
-    }
+  public refreshStarBeasts(): void {
+    this.refreshStarBeastsInternal();
   }
 
   private extendSnakeByOne(): void {
@@ -2045,47 +1506,6 @@ export class Game {
 
     this.snake.push({ ...tail });
     this.adjustSnakeOccupancy(tail, 1);
-  }
-
-  private updateStarBeastEffects(currentTime: number): void {
-    if (this.starBeastEffects.length === 0) {
-      return;
-    }
-
-    this.starBeastEffects = this.starBeastEffects.filter(
-      (effect) => currentTime - effect.createdAt < effect.lifetimeMs / 1000,
-    );
-  }
-
-  private primeStarBeastBehavior(beast: StarBeast, currentTime: number): void {
-    if (currentTime >= beast.nextCoreHuntAt && currentTime >= beast.coreHuntUntil) {
-      beast.coreHuntUntil = currentTime + rollDuration(
-        STAR_BEAST_CONFIG.coreHuntWindowRangeMs[0],
-        STAR_BEAST_CONFIG.coreHuntWindowRangeMs[1],
-      ) / 1000;
-      beast.nextCoreHuntAt = currentTime + rollDuration(
-        STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[0],
-        STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[1],
-      ) / 1000;
-    }
-
-    if (currentTime >= beast.nextAttackAt && currentTime >= beast.attackUntil) {
-      beast.attackUntil = currentTime + rollDuration(
-        STAR_BEAST_CONFIG.attackWindowRangeMs[0],
-        STAR_BEAST_CONFIG.attackWindowRangeMs[1],
-      ) / 1000;
-      beast.nextAttackAt = currentTime + rollDuration(
-        STAR_BEAST_CONFIG.attackCooldownRangeMs[0],
-        STAR_BEAST_CONFIG.attackCooldownRangeMs[1],
-      ) / 1000;
-    }
-  }
-
-  private getStarCoreCells(): GridCell[] {
-    return this.starCores.map((core) => ({
-      column: Math.floor(core.x),
-      row: Math.floor(core.y),
-    }));
   }
 
   private rebuildSnakeOccupancy(): void {
@@ -2122,60 +1542,25 @@ export class Game {
     return cell.row * this.grid.columns + cell.column;
   }
 
-  private evaluateSnakeAdvance(direction: Direction): SnakeAdvanceEvaluation | null {
-    const head = this.snake[0];
-
-    if (!head) {
-      return null;
-    }
-
-    const delta = DIRECTION_DELTAS[direction];
-    const nextHead: GridCell = {
-      column: head.column + delta.column,
-      row: head.row + delta.row,
-    };
-    const ateFoodIndex = this.foods.findIndex((food) => cellsMatch(food, nextHead));
-    const ateStarCoreIndex = this.findStarCoreIndex(nextHead);
-    const ateStarAttractorIndex = STAR_ATTRACTOR_ENABLED ? this.findStarAttractorIndex(nextHead) : -1;
-    const growthBeforeMove = this.pendingGrowthSegments;
-    const shouldKeepTail = ateFoodIndex !== -1 || ateStarCoreIndex !== -1 || growthBeforeMove > 0;
-    const isOutOfBounds = this.isOutOfBounds(nextHead);
-    const collidesWithSelf = !isOutOfBounds && this.collidesWithSelf(nextHead, shouldKeepTail);
-
+  private createSnakeMovementEvaluationContext(): SnakeMovementEvaluationContext {
     return {
-      nextHead,
-      ateFoodIndex,
-      ateStarCoreIndex,
-      ateStarAttractorIndex,
-      growthBeforeMove,
-      shouldKeepTail,
-      isOutOfBounds,
-      collidesWithSelf,
-      canAdvance: !isOutOfBounds && !collidesWithSelf,
+      grid: this.grid,
+      snake: this.snake,
+      foods: this.foods,
+      starCores: this.starCores,
+      starAttractors: this.starAttractors,
+      snakeOccupancy: this.snakeOccupancy,
+      pendingGrowthSegments: this.pendingGrowthSegments,
+      includeStarAttractors: STAR_ATTRACTOR_ENABLED,
     };
   }
 
   private canAdvanceDirection(direction: Direction): boolean {
-    return this.evaluateSnakeAdvance(direction)?.canAdvance ?? false;
+    return canAdvanceDirection(this.createSnakeMovementEvaluationContext(), direction);
   }
 
   private pickAdvanceDirection(primary: Direction, fallbacks: readonly Direction[] = []): { direction: Direction; primaryBlocked: boolean } {
-    const primaryBlocked = !this.canAdvanceDirection(primary);
-    const candidates = [primary, ...fallbacks.filter((direction) => direction !== primary)];
-
-    for (const direction of candidates) {
-      if (this.canAdvanceDirection(direction)) {
-        return {
-          direction,
-          primaryBlocked,
-        };
-      }
-    }
-
-    return {
-      direction: primary,
-      primaryBlocked,
-    };
+    return pickAdvanceDirection(this.createSnakeMovementEvaluationContext(), primary, fallbacks);
   }
 
   private createBlockedBlackHoleCue(cue: BlackHoleCue | null): BlackHoleCue | null {
@@ -2188,14 +1573,6 @@ export class Game {
       charge: 0,
       isPulling: false,
     };
-  }
-
-  private findStarAttractorIndex(cell: GridCell): number {
-    if (!STAR_ATTRACTOR_ENABLED) {
-      return -1;
-    }
-
-    return this.starAttractors.findIndex((attractor) => cellsMatch(attractor.cell, cell));
   }
 
   private collidesWithPlayerBody(cell: GridCell): boolean {
@@ -2216,292 +1593,8 @@ export class Game {
     return occupancy > 0 && !cellsMatch(head, cell);
   }
 
-  private consumeStarCore(beast: StarBeast, starCoreIndex: number, currentTime: number): void {
-    this.starCores.splice(starCoreIndex, 1);
-    beast.coreHuntUntil = currentTime;
-    beast.nextCoreHuntAt = currentTime + rollDuration(
-      STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[0],
-      STAR_BEAST_CONFIG.coreHuntCooldownRangeMs[1],
-    ) / 1000;
-    beast.aiDecisionCooldown = 0;
-  }
-
-  private findStarCoreIndex(cell: GridCell, radius = 0): number {
-    return this.starCores.findIndex((core) => {
-      const coreCell = { column: Math.floor(core.x), row: Math.floor(core.y) };
-
-      if (radius > 0) {
-        return Math.abs(coreCell.column - cell.column) <= radius && Math.abs(coreCell.row - cell.row) <= radius;
-      }
-
-      const distance = Math.hypot(core.x - (cell.column + 0.5), core.y - (cell.row + 0.5));
-
-      return cellsMatch(coreCell, cell) || distance <= 0.42;
-    });
-  }
-
   private collidesWithStarBeast(cell: GridCell): boolean {
     return this.starBeasts.some((beast) => beast.alive && beast.body.some((segment) => cellsMatch(segment, cell)));
-  }
-
-  private killStarBeast(beast: StarBeast, cause: StarBeastDeathCause, currentTime: number): void {
-    if (!beast.alive) {
-      return;
-    }
-
-    beast.alive = false;
-    beast.state = "dead";
-    this.starBeasts = this.starBeasts.filter((candidate) => candidate.id !== beast.id);
-
-    const availableSlots = STAR_BEAST_CONFIG.maxDroppedCoresOnMap - this.starCores.length;
-
-    if (availableSlots > 0) {
-      const drops = buildStarBeastDropCores(beast, cause, {
-        grid: this.grid,
-        currentTime,
-        blackHoles: this.blackHoles,
-      });
-
-      for (const drop of drops.slice(0, availableSlots)) {
-        drop.id = this.nextStarCoreId++;
-        this.starCores.push(drop);
-      }
-    }
-
-    const flashCell = beast.body[0] ? { ...beast.body[0] } : { ...this.birthCell };
-    this.starBeastEffects.push({
-      id: this.nextStarBeastEffectId++,
-      cell: flashCell,
-      createdAt: currentTime,
-      lifetimeMs: STAR_BEAST_CONFIG.deathFlashMs,
-      seed: beast.id * 97 + this.nextStarBeastEffectId,
-      length: beast.length,
-      cause,
-    });
-
-    const nextSpawnAllowedAt = currentTime + STAR_BEAST_CONFIG.respawnCooldownMs / 1000;
-    this.starBeastRespawnLockUntil = Math.max(this.starBeastRespawnLockUntil, nextSpawnAllowedAt);
-    this.starBeastNextSpawnCheckAt = Math.max(this.starBeastNextSpawnCheckAt, this.starBeastRespawnLockUntil);
-  }
-
-  private updateStarBeasts(stepMs: number): void {
-    if (this.phase !== "playing" || this.starBeasts.length === 0) {
-      return;
-    }
-
-    const currentTime = this.playElapsed / 1000;
-    const playerHead = this.snake[0];
-
-    if (!playerHead) {
-      return;
-    }
-
-    const playerBody = this.snake.slice(1);
-    const blockedCells = [...this.foods];
-    const playerDirection = this.direction;
-    const beastsToUpdate = [...this.starBeasts];
-
-    for (const beast of beastsToUpdate) {
-      if (this.phase !== "playing") {
-        return;
-      }
-
-      if (!beast.alive || !this.starBeasts.some((candidate) => candidate.id === beast.id)) {
-        continue;
-      }
-
-      this.advanceStarBeast(
-        beast,
-        stepMs,
-        currentTime,
-        playerHead,
-        playerBody,
-        blockedCells,
-        this.getStarCoreCells(),
-        playerDirection,
-      );
-    }
-  }
-
-  private advanceStarBeast(
-    beast: StarBeast,
-    deltaMs: number,
-    currentTime: number,
-    playerHead: GridCell,
-    playerBody: readonly GridCell[],
-    blockedCells: readonly GridCell[],
-    starCoreCells: readonly GridCell[],
-    playerDirection: Direction,
-  ): void {
-    if (!beast.alive || beast.body.length === 0) {
-      return;
-    }
-
-    let visibleStarCoreCells = starCoreCells;
-
-    if (beast.state === "spawning") {
-      beast.spawnGraceTime = Math.max(0, beast.spawnGraceTime - deltaMs);
-
-      if (beast.spawnGraceTime > 0) {
-        return;
-      }
-
-      beast.state = "patrol";
-      beast.aiDecisionCooldown = 0;
-    }
-
-    this.primeStarBeastBehavior(beast, currentTime);
-
-    beast.moveTimer += deltaMs;
-    const moveInterval = Math.max(90, BEAST_BASE_STEP_MS / Math.max(0.55, beast.speedFactor));
-
-    while (beast.moveTimer >= moveInterval && beast.alive && this.phase === "playing") {
-      const otherBeasts = this.starBeasts.filter((candidate) => candidate.id !== beast.id && candidate.alive);
-      beast.state = this.getStarBeastState(playerHead, beast);
-      const moveContext: StarBeastMoveContext = {
-        grid: this.grid,
-        playerHead,
-        playerDirection,
-        playerBody,
-        blockedCells,
-        starCoreCells: visibleStarCoreCells,
-        otherStarBeasts: otherBeasts,
-        blackHoles: this.blackHoles,
-        currentTime,
-      };
-
-      if (beast.aiDecisionCooldown > 0) {
-        beast.aiDecisionCooldown -= 1;
-      } else {
-        beast.dir = chooseStarBeastDirection(beast, moveContext);
-        beast.aiDecisionCooldown = beast.turnCommitTicks;
-      }
-
-      const head = beast.body[0];
-
-      if (!head) {
-        this.killStarBeast(beast, "black_hole", currentTime);
-        return;
-      }
-
-      const delta = DIRECTION_DELTAS[beast.dir];
-      const nextHead: GridCell = {
-        column: head.column + delta.column,
-        row: head.row + delta.row,
-      };
-
-      if (this.isOutOfBounds(nextHead)) {
-        beast.aiDecisionCooldown = 0;
-        beast.moveTimer = Math.max(0, beast.moveTimer - moveInterval);
-        continue;
-      }
-
-      if (this.collidesWithPlayerBody(nextHead)) {
-        this.killStarBeast(beast, "player_body", currentTime);
-        return;
-      }
-
-      if (this.collidesWithBlackHole(nextHead)) {
-        this.killStarBeast(beast, "black_hole", currentTime);
-        return;
-      }
-
-      if (cellsMatch(nextHead, playerHead)) {
-        this.handlePlayerDeath("star_beast");
-        return;
-      }
-
-      if (blockedCells.some((cell) => cellsMatch(cell, nextHead))) {
-        beast.aiDecisionCooldown = 0;
-        break;
-      }
-
-      if (otherBeasts.some((other) => other.body.some((segment) => cellsMatch(segment, nextHead)))) {
-        beast.aiDecisionCooldown = 0;
-        break;
-      }
-
-      let growth = 0;
-      const ateStarCoreIndex = this.findStarCoreIndex(nextHead);
-
-      if (ateStarCoreIndex !== -1) {
-        this.consumeStarCore(beast, ateStarCoreIndex, currentTime);
-        growth += 1;
-        visibleStarCoreCells = this.getStarCoreCells();
-      }
-
-      beast.coreScanStepCount += 1;
-
-      if (beast.coreScanStepCount >= 2) {
-        beast.coreScanStepCount = 0;
-
-        const nearbyStarCoreIndex = this.findStarCoreIndex(head, 1);
-
-        if (nearbyStarCoreIndex !== -1) {
-          this.consumeStarCore(beast, nearbyStarCoreIndex, currentTime);
-          growth += 1;
-          visibleStarCoreCells = this.getStarCoreCells();
-        }
-      }
-
-      const nextLength = Math.min(STAR_BEAST_CONFIG.maxLength, beast.length + growth);
-
-      beast.body = [nextHead, ...beast.body];
-
-      while (beast.body.length > nextLength) {
-        beast.body.pop();
-      }
-
-      beast.length = nextLength;
-
-      beast.moveTimer = Math.max(0, beast.moveTimer - moveInterval);
-      beast.aiDecisionCooldown = Math.max(0, beast.aiDecisionCooldown - 1);
-      beast.state = this.getStarBeastState(playerHead, beast);
-    }
-  }
-
-  private getStarBeastState(playerHead: GridCell, beast: StarBeast): StarBeast["state"] {
-    const head = beast.body[0];
-
-    if (!head) {
-      return "patrol";
-    }
-
-    const distance = Math.abs(head.column - playerHead.column) + Math.abs(head.row - playerHead.row);
-
-    if (distance <= beast.aggroRadius) {
-      return "chase";
-    }
-
-    if (distance >= beast.loseAggroRadius) {
-      return "patrol";
-    }
-
-    return beast.state === "chase" ? "chase" : "patrol";
-  }
-
-  private collidesWithSelf(cell: GridCell, willGrow: boolean): boolean {
-    const index = this.getSnakeCellIndex(cell);
-
-    if (index === null) {
-      return false;
-    }
-
-    const occupancy = this.snakeOccupancy[index] ?? 0;
-
-    if (occupancy <= 0) {
-      return false;
-    }
-
-    if (!willGrow) {
-      const tail = this.snake[this.snake.length - 1];
-
-      if (tail && cellsMatch(tail, cell) && occupancy === 1) {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   private collidesWithBlackHole(cell: GridCell): boolean {
@@ -2575,131 +1668,6 @@ export class Game {
 
   private isOutOfBounds(cell: GridCell): boolean {
     return cell.column < 0 || cell.row < 0 || cell.column >= this.grid.columns || cell.row >= this.grid.rows;
-  }
-
-  private isCurrentPlacementValid(): boolean {
-    const snakeIsValid = this.snake.every((segment) => !this.isOutOfBounds(segment));
-    const occupiedBlackHoleCells = new Set<string>();
-    const occupiedStarBeastCells = new Set<string>();
-    const occupiedStarCoreCells = new Set<string>();
-    const foodsAreValid = this.foods.every((food) => {
-      if (this.isOutOfBounds(food) || this.snake.some((segment) => cellsMatch(segment, food))) {
-        return false;
-      }
-
-      if (STAR_ATTRACTOR_ENABLED && this.starAttractors.some((attractor) => cellsMatch(attractor.cell, food))) {
-        return false;
-      }
-
-      if (this.starBeasts.some((beast) => beast.body.some((segment) => cellsMatch(segment, food)))) {
-        return false;
-      }
-
-      if (this.starCores.some((core) => cellsMatch({ column: Math.floor(core.x), row: Math.floor(core.y) }, food))) {
-        return false;
-      }
-
-      return !this.blackHoles.some((blackHole) => cellsMatch(blackHole.cell, food));
-    });
-    const blackHolesAreValid = this.blackHoles.every((blackHole) => {
-      if (this.isOutOfBounds(blackHole.cell)) {
-        return false;
-      }
-
-      const key = `${blackHole.cell.column}:${blackHole.cell.row}`;
-
-      if (occupiedBlackHoleCells.has(key)) {
-        return false;
-      }
-
-      occupiedBlackHoleCells.add(key);
-
-      if (this.snake.some((segment) => cellsMatch(segment, blackHole.cell))) {
-        return false;
-      }
-
-      if (this.foods.some((food) => cellsMatch(food, blackHole.cell))) {
-        return false;
-      }
-
-      if (STAR_ATTRACTOR_ENABLED && this.starAttractors.some((attractor) => cellsMatch(attractor.cell, blackHole.cell))) {
-        return false;
-      }
-
-      return true;
-    });
-    const starBeastsAreValid = this.starBeasts.every((beast) => {
-      if (!beast.alive || beast.body.length === 0) {
-        return false;
-      }
-
-      return beast.body.every((segment) => {
-        if (this.isOutOfBounds(segment)) {
-          return false;
-        }
-
-        const key = `${segment.column}:${segment.row}`;
-
-        if (occupiedStarBeastCells.has(key)) {
-          return false;
-        }
-
-        occupiedStarBeastCells.add(key);
-
-        if (this.snake.some((snakeCell) => cellsMatch(snakeCell, segment))) {
-          return false;
-        }
-
-        if (this.foods.some((food) => cellsMatch(food, segment))) {
-          return false;
-        }
-
-        if (STAR_ATTRACTOR_ENABLED && this.starAttractors.some((attractor) => cellsMatch(attractor.cell, segment))) {
-          return false;
-        }
-
-        if (this.starCores.some((core) => cellsMatch({ column: Math.floor(core.x), row: Math.floor(core.y) }, segment))) {
-          return false;
-        }
-
-        if (this.blackHoles.some((blackHole) => cellsMatch(blackHole.cell, segment))) {
-          return false;
-        }
-
-        return true;
-      });
-    });
-    const starCoresAreValid = this.starCores.every((core) => {
-      if (!Number.isFinite(core.x) || !Number.isFinite(core.y)) {
-        return false;
-      }
-
-      if (core.x < 0.35 || core.y < 0.35 || core.x > this.grid.columns - 0.35 || core.y > this.grid.rows - 0.35) {
-        return false;
-      }
-
-      const key = `${Math.floor(core.x)}:${Math.floor(core.y)}`;
-
-      if (occupiedStarCoreCells.has(key)) {
-        return false;
-      }
-
-      occupiedStarCoreCells.add(key);
-
-      const coreCell = { column: Math.floor(core.x), row: Math.floor(core.y) };
-
-      if (this.snake.some((segment) => cellsMatch(segment, coreCell))) {
-        return false;
-      }
-
-      if (STAR_ATTRACTOR_ENABLED && this.starAttractors.some((attractor) => cellsMatch(attractor.cell, coreCell))) {
-        return false;
-      }
-
-      return true;
-    });
-
-    return snakeIsValid && foodsAreValid && blackHolesAreValid && starBeastsAreValid && starCoresAreValid;
   }
 
   private endRun(): void {

@@ -12,7 +12,8 @@ import {
   spawnStarBeast,
 } from "../src/game/starBeast.ts";
 import { getNextLengthUnlockCopy } from "../src/game/progression.ts";
-import { getCoreGlyphMetrics, getStarCoreBurstState, resolveRewardBurstOrigin } from "../src/game/render.ts";
+import { getCoreGlyphMetrics, getStarCoreBurstState } from "../src/game/render.ts";
+import { resolveRewardBurstOrigin } from "../src/game/renderState.ts";
 import { createGameHarness, createPrng } from "./test-support.ts";
 
 function makeSnake(length: number, headColumn: number, row: number): GridCell[] {

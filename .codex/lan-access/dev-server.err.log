@@ -1,0 +1,261 @@
+[2m14:34:09[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mIdentifier `RenderState` has already been declared
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:23:8 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m23 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m [0mRenderState[38;5;249m,[0m
+ [38;5;240m   │[0m        ─────┬─────  
+ [38;5;240m   │[0m             ╰─────── `RenderState` has already been declared here
+ [38;5;240m   │[0m 
+ [38;5;246m28 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m [0mRenderState[38;5;249m,[0m
+ [38;5;240m   │[0m        ─────┬─────  
+ [38;5;240m   │[0m             ╰─────── It can not be redeclared here
+[38;5;246m────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:34:09[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mIdentifier `RenderState` has already been declared
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:23:8 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m23 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m [0mRenderState[38;5;249m,[0m
+ [38;5;240m   │[0m        ─────┬─────  
+ [38;5;240m   │[0m             ╰─────── `RenderState` has already been declared here
+ [38;5;240m   │[0m 
+ [38;5;246m28 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m [0mRenderState[38;5;249m,[0m
+ [38;5;240m   │[0m        ─────┬─────  
+ [38;5;240m   │[0m             ╰─────── It can not be redeclared here
+[38;5;246m────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:34:09[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mIdentifier `RenderState` has already been declared
+    [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:23:8 [38;5;246m][0m
+    [38;5;246m│[0m
+ [38;5;246m23 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m [0mRenderState[38;5;249m,[0m
+ [38;5;240m   │[0m        ─────┬─────  
+ [38;5;240m   │[0m             ╰─────── `RenderState` has already been declared here
+ [38;5;240m   │[0m 
+ [38;5;246m28 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m [0mRenderState[38;5;249m,[0m
+ [38;5;240m   │[0m        ─────┬─────  
+ [38;5;240m   │[0m             ╰─────── It can not be redeclared here
+[38;5;246m────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:39:33[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:39:33[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:47:14[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:47:14[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:47:33[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:47:33[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:47:52[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:47:52[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:47:59[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:47:59[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:48:10[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:48:10[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m14:48:34[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+[2m14:48:34[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnterminated string
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/game/render.ts:2286:20 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2286 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m.[0m[38;5;249mf[0m[38;5;249mi[0m[38;5;249ml[0m[38;5;249ml[0m[38;5;249mT[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249m([0m"复活�?, centerX, centerY + radius * 0.88);
+ [38;5;240m     │[0m                    ───────────────────────┬────────────────────  
+ [38;5;240m     │[0m                                           ╰────────────────────── 
+[38;5;246m──────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/game/render.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
