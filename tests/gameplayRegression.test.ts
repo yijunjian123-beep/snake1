@@ -51,14 +51,14 @@ test("moving into a live body segment still triggers self-collision", () => {
 
   try {
     setRunState(internals, [
-      { column: 2, row: 1 },
       { column: 2, row: 2 },
-      { column: 1, row: 2 },
+      { column: 3, row: 2 },
+      { column: 3, row: 1 },
+      { column: 2, row: 1 },
       { column: 1, row: 1 },
-      { column: 1, row: 0 },
     ], "up");
 
-    (internals.advanceSnakeFromDirection as (direction: "left") => void)("left");
+    (internals.advanceSnakeFromDirection as (direction: "right") => void)("right");
 
     assert.equal(internals.phase, "revivePrompt");
     assert.equal(internals.deathReason, "snake_body");

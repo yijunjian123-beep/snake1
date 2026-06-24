@@ -1,3 +1,5 @@
+import { CARDINAL_DIRECTIONS, stepCell } from "./direction";
+import { cellKey, isCellInsideZone, isInsideGrid, isWithinChebyshevRadius } from "./gridMath";
 import type { Direction, GridCell, GridMetrics } from "./types";
 import type { SafeSpawnConfig, SafeSpawnZone } from "./progression";
 
@@ -22,7 +24,6 @@ export interface ReviveSpawnConfig {
 }
 
 const DEFAULT_RANDOM = (): number => Math.random();
-const REVIVE_DIRECTIONS: readonly Direction[] = ["up", "right", "down", "left"];
 const REVIVE_FORWARD_CLEAR_DISTANCE = 12;
 
 export function findSafeSpawnPosition(grid: GridMetrics, config: SafeSpawnConfig = {}): GridCell | null {
@@ -124,7 +125,7 @@ export function findReviveSpawnPlacement(
 
   for (const headCandidate of headCandidates) {
     const head = headCandidate.cell;
-    const directionCandidates = REVIVE_DIRECTIONS
+    const directionCandidates = CARDINAL_DIRECTIONS
       .map((direction) => {
         const forwardCells = getReviveForwardCells(
           head,
@@ -237,12 +238,11 @@ function isWallDanger(cell: GridCell, grid: GridMetrics, padding: number): boole
 }
 
 function isNear(cell: GridCell, center: GridCell, radius: number): boolean {
-  if (radius <= 0) return false;
-  return Math.max(Math.abs(cell.row - center.row), Math.abs(cell.column - center.column)) <= radius;
+  return isWithinChebyshevRadius(cell, center, radius);
 }
 
 function isInDangerZone(cell: GridCell, zone: SafeSpawnZone): boolean {
-  return isNear(cell, zone.center, Math.max(0, Math.floor(zone.radius)));
+  return isCellInsideZone(cell, zone);
 }
 
 function buildReviveBodyPath(
@@ -260,7 +260,7 @@ function buildReviveBodyPath(
     return true;
   }
 
-  const candidates = REVIVE_DIRECTIONS
+  const candidates = CARDINAL_DIRECTIONS
     .map((direction) => {
       const cell = stepCell(current, direction);
 
@@ -439,7 +439,7 @@ function getOpenNeighborCount(
 ): number {
   let count = 0;
 
-  for (const direction of REVIVE_DIRECTIONS) {
+  for (const direction of CARDINAL_DIRECTIONS) {
     const next = stepCell(cell, direction);
 
     if (!isPlacementCellSafe(next, grid, blocked, dangerZones, wallPadding)) {
@@ -452,40 +452,8 @@ function getOpenNeighborCount(
   return count;
 }
 
-function stepCell(cell: GridCell, direction: Direction): GridCell {
-  const delta = directionDelta(direction);
-
-  return {
-    column: cell.column + delta.column,
-    row: cell.row + delta.row,
-  };
-}
-
-function directionDelta(direction: Direction): GridCell {
-  switch (direction) {
-    case "up":
-      return { column: 0, row: -1 };
-    case "right":
-      return { column: 1, row: 0 };
-    case "down":
-      return { column: 0, row: 1 };
-    case "left":
-      return { column: -1, row: 0 };
-  }
-
-  throw new Error("Unreachable direction.");
-}
-
-function isInsideGrid(cell: GridCell, grid: GridMetrics): boolean {
-  return cell.row >= 0 && cell.column >= 0 && cell.row < grid.rows && cell.column < grid.columns;
-}
-
 function pickFrom(candidates: readonly GridCell[], random: () => number): GridCell | null {
   if (candidates.length === 0) return null;
   const index = Math.floor(random() * candidates.length);
   return candidates[Math.min(candidates.length - 1, Math.max(0, index))] ?? null;
-}
-
-function cellKey(cell: GridCell): string {
-  return cell.row + ':' + cell.column;
 }

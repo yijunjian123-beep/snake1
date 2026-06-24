@@ -13,7 +13,6 @@ import { createInputController } from "./input";
 import {
   DEFAULT_SAFE_SPAWN_CONFIG,
   DEFAULT_UNLOCK_CONFIG,
-  getNextLengthUnlockCopy,
   getUnlockedFeatures as computeUnlockedFeatures,
   type GameProgress,
   type UnlockedFeatures,
@@ -33,8 +32,36 @@ import {
   rollStarAttractorNeed,
   spawnStarAttractor,
 } from "./starAttractor";
+import { DIRECTION_DELTAS, OPPOSITE_DIRECTIONS } from "./direction";
+import {
+  type ActiveDirectionalInput,
+  type ActiveSpeedInput,
+  type EntityRuntimeState,
+  type InputRuntimeState,
+  type MovementRuntimeState,
+  type MovementSpeedState,
+  type ProgressRuntimeState,
+  type RunLifecycleState,
+  type SnakeAdvanceEvaluation,
+  type SpeedCueState,
+  type SpeedRuntimeState,
+  type TimingRuntimeState,
+  type SpawnRuntimeState,
+  type UiSyncState,
+  type WallGraceState,
+} from "./gameState";
+import { createEntityState, createInputState, createLifecycleState, createMovementState, createProgressState, createSpawnState, createSpeedState, createTimingState, resetTimingState } from "./stateFactory";
+import { cellKey, cellsMatch, chebyshevDistance } from "./gridMath";
 import { createRenderer } from "./render";
 import { readHighScore, writeHighScore } from "./storage";
+import {
+  applyTickerUiModel,
+  applyUiSyncModel,
+  buildGameSnapshot,
+  buildTickerUiModel,
+  buildUiSyncModel,
+  createUiSyncState,
+} from "./viewModel";
 import type {
   BlackHole,
   BlackHoleCue,
@@ -48,7 +75,6 @@ import type {
   InputAction,
   InputCommand,
   InputController,
-  InputSource,
   Renderer,
   SpeedCueMode,
   SpeedMode,
@@ -69,42 +95,12 @@ interface GameOptions {
   ui: GameUiElements;
 }
 
-const PHASE_LABELS: Record<GamePhase, string> = {
-  ready: "待机",
-  playing: "运行中",
-  revivePrompt: "待复活",
-  reviving: "复活中",
-  paused: "已暂停",
-  gameOver: "结束",
-};
-
-const DIRECTION_DELTAS: Record<Direction, GridCell> = {
-  up: { column: 0, row: -1 },
-  right: { column: 1, row: 0 },
-  down: { column: 0, row: 1 },
-  left: { column: -1, row: 0 },
-};
-
-const OPPOSITE_DIRECTIONS: Record<Direction, Direction> = {
-  up: "down",
-  right: "left",
-  down: "up",
-  left: "right",
-};
-
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
 const BEAST_BASE_STEP_MS = BASE_STEP_MS;
 const BOOST_STEP_RATIO = 0.6;
 const ACCELERATE_SPEED_MULTIPLIER = 2.6 / 0.7 / 0.7;
 const BRAKE_SPEED_MULTIPLIER = 0.35;
 const SPEED_CUE_DURATION_MS = 1500;
-const HUD_TICKER_LINES = [
-  "长按Shift减速，长按方向键加速",
-  "注意，黑洞会把你吸入深渊",
-  "杀死星兽，可以吃它的能量！",
-] as const;
-const HUD_TICKER_INTERVAL_MS = 10000;
-const HUD_TICKER_FADE_MS = 720;
 const MAX_DIRECTION_QUEUE_LENGTH = 2;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
@@ -116,7 +112,6 @@ const FOOD_WAVE_BAG_CLUSTER_COUNT = 3;
 const FOOD_CLUSTER_MIN_COUNT = 3;
 const FOOD_CLUSTER_MAX_COUNT = 5;
 const FOOD_CLUSTER_RADIUS = 2;
-const DEFAULT_LIVES = 3;
 const REVIVE_COUNTDOWN_MS = 3000;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
@@ -127,14 +122,6 @@ const COMPACT_LANDSCAPE_TOP_MARGIN = 170;
 const SHORT_SCREEN_TOP_MARGIN = 112;
 const DEFAULT_HUD_GAP = 12;
 const COMPACT_LANDSCAPE_HUD_GAP = 10;
-
-const DEATH_REASON_LABELS: Record<DeathReason, string> = {
-  wall: "撞到墙壁了",
-  snake_body: "撞到蛇身体了",
-  black_hole: "被黑洞吸入了",
-  star_beast: "被星兽撞到了",
-  unknown: "意外死亡",
-};
 
 type FoodWaveKind = "single" | "cluster";
 
@@ -200,18 +187,6 @@ function directionFromAction(action: InputAction): Direction | null {
   }
 }
 
-function cellsMatch(left: GridCell, right: GridCell): boolean {
-  return left.column === right.column && left.row === right.row;
-}
-
-function cellKey(cell: GridCell): string {
-  return `${cell.column}:${cell.row}`;
-}
-
-function chebyshevDistance(left: GridCell, right: GridCell): number {
-  return Math.max(Math.abs(left.column - right.column), Math.abs(left.row - right.row));
-}
-
 function shuffleArray<T>(items: T[], random: () => number = Math.random): T[] {
   for (let index = items.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(random() * (index + 1));
@@ -255,76 +230,6 @@ function rollDuration(min: number, max: number): number {
   return min + Math.random() * (max - min);
 }
 
-interface ActiveDirectionalInput {
-  action: Direction;
-  source: InputSource;
-  order: number;
-}
-
-interface ActiveSpeedInput {
-  mode: SpeedCueMode;
-  source: InputSource;
-  order: number;
-}
-
-interface SpeedCueState {
-  mode: SpeedCueMode;
-  anchor: GridCell;
-  startedAt: number;
-}
-
-interface WallGraceState {
-  direction: Direction;
-  startedAt: number;
-  expiresAt: number;
-}
-
-interface MovementSpeedState {
-  mode: SpeedMode;
-  multiplier: number;
-  stepMs: number;
-}
-
-interface UiSyncState {
-  rootPhase: string;
-  boardTop: string;
-  startPanelHidden: boolean;
-  startButtonText: string;
-  startButtonAriaLabel: string;
-  startButtonDisabled: boolean;
-  pauseButtonDisabled: boolean;
-  pauseButtonText: string;
-  pauseButtonAriaLabel: string;
-  panelPrimaryLabel: string;
-  panelPrimaryValue: string;
-  panelSecondaryLabel: string;
-  panelMetaHidden: boolean;
-  panelMetaLabel: string;
-  lifeHeartActiveStates: string[];
-  lengthLabel: string;
-  unlockTitleLabel: string;
-  unlockValueLabel: string;
-  stateLabel: string;
-  fpsLabel: string;
-  sizeLabel: string;
-  tickerCurrentText: string;
-  tickerNextText: string;
-  tickerCurrentOpacity: string;
-  tickerNextOpacity: string;
-}
-
-interface SnakeAdvanceEvaluation {
-  nextHead: GridCell;
-  ateFoodIndex: number;
-  ateStarCoreIndex: number;
-  ateStarAttractorIndex: number;
-  growthBeforeMove: number;
-  shouldKeepTail: boolean;
-  isOutOfBounds: boolean;
-  collidesWithSelf: boolean;
-  canAdvance: boolean;
-}
-
 export class Game {
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: GameUiElements;
@@ -335,62 +240,441 @@ export class Game {
   private readonly activeDirectionalInputs = new Map<string, ActiveDirectionalInput>();
   private readonly activeSpeedInputs = new Map<string, ActiveSpeedInput>();
 
-  private phase: GamePhase = "ready";
+  private lifecycle: RunLifecycleState = createLifecycleState();
   private grid: GridMetrics;
-  private snake: GridCell[] = [];
-  private foods: GridCell[] = [];
-  private starAttractors: StarAttractor[] = [];
-  private starAttractorEffects: StarAttractorEffect[] = [];
-  private starBeasts: StarBeast[] = [];
-  private starCores: StarCore[] = [];
-  private starBeastEffects: StarBeastEffect[] = [];
-  private blackHoles: BlackHole[] = [];
-  private blackHoleAlert: GameSnapshot["blackHoleAlert"] = null;
-  private blackHoleGravityState: BlackHoleGravityState = { key: null, charge: 0 };
-  private blackHoleCue: GameSnapshot["blackHoleCue"] = null;
-  private blackHoleRecoveryDirection: Direction | null = null;
-  private livesRemaining = DEFAULT_LIVES;
-  private deathReason: DeathReason | null = null;
-  private reviving = false;
-  private reviveEndsAt = 0;
-  private wallGrace: WallGraceState | null = null;
-  private birthCell: GridCell = { column: 0, row: 0 };
-  private direction: Direction = "right";
-  private directionQueue: Direction[] = [];
-  private snakeOccupancy = new Uint8Array(0);
-  private score = 0;
-  private coresEaten = 0;
-  private rewardBurstOrigin: GridCell | null = null;
-  private highScore: number;
+  private movement: MovementRuntimeState = createMovementState();
   private frameId: number | null = null;
-  private elapsed = 0;
-  private playElapsed = 0;
-  private movementTick = 0;
-  private stepAccumulator = 0;
-  private lastFrameTime = 0;
-  private lastUiUpdate = 0;
-  private lastTickerUpdate = Number.NEGATIVE_INFINITY;
-  private lastFps = 0;
-  private isBoosting = false;
-  private speedCue: SpeedCueState | null = null;
-  private lastMovementSpeedMode: SpeedMode = "base";
-  private currentMovementSpeed: MovementSpeedState = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
-  private uiSyncState: UiSyncState | null = null;
-  private activeInputSequence = 0;
-  private pendingGrowthSegments = 0;
-  private starAttractorEatCount = 0;
-  private starAttractorNeedIndex = 0;
-  private starAttractorNeed: number = STAR_ATTRACTOR_CONFIG.thresholdRanges[0]?.[0] ?? 6;
-  private starAttractorSpawnPending = false;
-  private starBeastNextSpawnCheckAt = 0;
-  private starBeastRespawnLockUntil = 0;
-  private foodWaveBag: FoodWaveKind[] = [];
-  private foodWaveNextSpawnAt = FOOD_WAVE_INTERVAL_MS;
-  private nextStarAttractorId = 1;
-  private nextStarAttractorEffectId = 1;
-  private nextStarBeastId = 1;
-  private nextStarCoreId = 1;
-  private nextStarBeastEffectId = 1;
+  private timing: TimingRuntimeState = createTimingState();
+  private speedRuntime: SpeedRuntimeState = createSpeedState();
+  private entities: EntityRuntimeState = createEntityState();
+  private progress: ProgressRuntimeState = createProgressState();
+  private spawn: SpawnRuntimeState = createSpawnState();
+  private inputState: InputRuntimeState = createInputState();
+  private uiSyncState: UiSyncState = createUiSyncState();
+
+  private get phase(): GamePhase {
+    return this.lifecycle.phase;
+  }
+
+  private set phase(value: GamePhase) {
+    this.lifecycle.phase = value;
+  }
+
+  private get livesRemaining(): number {
+    return this.lifecycle.livesRemaining;
+  }
+
+  private set livesRemaining(value: number) {
+    this.lifecycle.livesRemaining = value;
+  }
+
+  private get deathReason(): DeathReason | null {
+    return this.lifecycle.deathReason;
+  }
+
+  private set deathReason(value: DeathReason | null) {
+    this.lifecycle.deathReason = value;
+  }
+
+  private get reviving(): boolean {
+    return this.lifecycle.reviving;
+  }
+
+  private set reviving(value: boolean) {
+    this.lifecycle.reviving = value;
+  }
+
+  private get reviveEndsAt(): number {
+    return this.lifecycle.reviveEndsAt;
+  }
+
+  private set reviveEndsAt(value: number) {
+    this.lifecycle.reviveEndsAt = value;
+  }
+
+  private get wallGrace(): WallGraceState | null {
+    return this.lifecycle.wallGrace;
+  }
+
+  private set wallGrace(value: WallGraceState | null) {
+    this.lifecycle.wallGrace = value;
+  }
+
+  private get birthCell(): GridCell {
+    return this.lifecycle.birthCell;
+  }
+
+  private set birthCell(value: GridCell) {
+    this.lifecycle.birthCell = value;
+  }
+
+  private get direction(): Direction {
+    return this.movement.direction;
+  }
+
+  private set direction(value: Direction) {
+    this.movement.direction = value;
+  }
+
+  private get directionQueue(): Direction[] {
+    return this.movement.directionQueue;
+  }
+
+  private set directionQueue(value: Direction[]) {
+    this.movement.directionQueue = value;
+  }
+
+  private get snakeOccupancy(): Uint8Array {
+    return this.movement.snakeOccupancy;
+  }
+
+  private set snakeOccupancy(value: Uint8Array) {
+    this.movement.snakeOccupancy = value;
+  }
+
+  private get movementTick(): number {
+    return this.movement.movementTick;
+  }
+
+  private set movementTick(value: number) {
+    this.movement.movementTick = value;
+  }
+
+  private get stepAccumulator(): number {
+    return this.movement.stepAccumulator;
+  }
+
+  private set stepAccumulator(value: number) {
+    this.movement.stepAccumulator = value;
+  }
+
+  private get isBoosting(): boolean {
+    return this.movement.isBoosting;
+  }
+
+  private set isBoosting(value: boolean) {
+    this.movement.isBoosting = value;
+  }
+
+  private get pendingGrowthSegments(): number {
+    return this.movement.pendingGrowthSegments;
+  }
+
+  private set pendingGrowthSegments(value: number) {
+    this.movement.pendingGrowthSegments = value;
+  }
+
+  private get elapsed(): number {
+    return this.timing.elapsed;
+  }
+
+  private set elapsed(value: number) {
+    this.timing.elapsed = value;
+  }
+
+  private get playElapsed(): number {
+    return this.timing.playElapsed;
+  }
+
+  private set playElapsed(value: number) {
+    this.timing.playElapsed = value;
+  }
+
+  private get lastFrameTime(): number {
+    return this.timing.lastFrameTime;
+  }
+
+  private set lastFrameTime(value: number) {
+    this.timing.lastFrameTime = value;
+  }
+
+  private get lastUiUpdate(): number {
+    return this.timing.lastUiUpdate;
+  }
+
+  private set lastUiUpdate(value: number) {
+    this.timing.lastUiUpdate = value;
+  }
+
+  private get lastTickerUpdate(): number {
+    return this.timing.lastTickerUpdate;
+  }
+
+  private set lastTickerUpdate(value: number) {
+    this.timing.lastTickerUpdate = value;
+  }
+
+  private get lastFps(): number {
+    return this.timing.lastFps;
+  }
+
+  private set lastFps(value: number) {
+    this.timing.lastFps = value;
+  }
+
+  private get speedCue(): SpeedCueState | null {
+    return this.speedRuntime.speedCue;
+  }
+
+  private set speedCue(value: SpeedCueState | null) {
+    this.speedRuntime.speedCue = value;
+  }
+
+  private get lastMovementSpeedMode(): SpeedMode {
+    return this.speedRuntime.lastMovementSpeedMode;
+  }
+
+  private set lastMovementSpeedMode(value: SpeedMode) {
+    this.speedRuntime.lastMovementSpeedMode = value;
+  }
+
+  private get currentMovementSpeed(): MovementSpeedState {
+    return this.speedRuntime.currentMovementSpeed;
+  }
+
+  private set currentMovementSpeed(value: MovementSpeedState) {
+    this.speedRuntime.currentMovementSpeed = value;
+  }
+
+  private get snake(): GridCell[] {
+    return this.entities.snake;
+  }
+
+  private set snake(value: GridCell[]) {
+    this.entities.snake = value;
+  }
+
+  private get foods(): GridCell[] {
+    return this.entities.foods;
+  }
+
+  private set foods(value: GridCell[]) {
+    this.entities.foods = value;
+  }
+
+  private get starAttractors(): StarAttractor[] {
+    return this.entities.starAttractors;
+  }
+
+  private set starAttractors(value: StarAttractor[]) {
+    this.entities.starAttractors = value;
+  }
+
+  private get starAttractorEffects(): StarAttractorEffect[] {
+    return this.entities.starAttractorEffects;
+  }
+
+  private set starAttractorEffects(value: StarAttractorEffect[]) {
+    this.entities.starAttractorEffects = value;
+  }
+
+  private get starBeasts(): StarBeast[] {
+    return this.entities.starBeasts;
+  }
+
+  private set starBeasts(value: StarBeast[]) {
+    this.entities.starBeasts = value;
+  }
+
+  private get starCores(): StarCore[] {
+    return this.entities.starCores;
+  }
+
+  private set starCores(value: StarCore[]) {
+    this.entities.starCores = value;
+  }
+
+  private get starBeastEffects(): StarBeastEffect[] {
+    return this.entities.starBeastEffects;
+  }
+
+  private set starBeastEffects(value: StarBeastEffect[]) {
+    this.entities.starBeastEffects = value;
+  }
+
+  private get blackHoles(): BlackHole[] {
+    return this.entities.blackHoles;
+  }
+
+  private set blackHoles(value: BlackHole[]) {
+    this.entities.blackHoles = value;
+  }
+
+  private get blackHoleAlert(): GameSnapshot["blackHoleAlert"] {
+    return this.entities.blackHoleAlert;
+  }
+
+  private set blackHoleAlert(value: GameSnapshot["blackHoleAlert"]) {
+    this.entities.blackHoleAlert = value;
+  }
+
+  private get blackHoleGravityState(): BlackHoleGravityState {
+    return this.entities.blackHoleGravityState;
+  }
+
+  private set blackHoleGravityState(value: BlackHoleGravityState) {
+    this.entities.blackHoleGravityState = value;
+  }
+
+  private get blackHoleCue(): GameSnapshot["blackHoleCue"] {
+    return this.entities.blackHoleCue;
+  }
+
+  private set blackHoleCue(value: GameSnapshot["blackHoleCue"]) {
+    this.entities.blackHoleCue = value;
+  }
+
+  private get blackHoleRecoveryDirection(): Direction | null {
+    return this.entities.blackHoleRecoveryDirection;
+  }
+
+  private set blackHoleRecoveryDirection(value: Direction | null) {
+    this.entities.blackHoleRecoveryDirection = value;
+  }
+
+  private get rewardBurstOrigin(): GridCell | null {
+    return this.entities.rewardBurstOrigin;
+  }
+
+  private set rewardBurstOrigin(value: GridCell | null) {
+    this.entities.rewardBurstOrigin = value;
+  }
+
+  private get score(): number {
+    return this.progress.score;
+  }
+
+  private set score(value: number) {
+    this.progress.score = value;
+  }
+
+  private get coresEaten(): number {
+    return this.progress.coresEaten;
+  }
+
+  private set coresEaten(value: number) {
+    this.progress.coresEaten = value;
+  }
+
+  private get highScore(): number {
+    return this.progress.highScore;
+  }
+
+  private set highScore(value: number) {
+    this.progress.highScore = value;
+  }
+
+  private get activeInputSequence(): number {
+    return this.inputState.activeInputSequence;
+  }
+
+  private set activeInputSequence(value: number) {
+    this.inputState.activeInputSequence = value;
+  }
+
+  private get starAttractorEatCount(): number {
+    return this.spawn.starAttractorEatCount;
+  }
+
+  private set starAttractorEatCount(value: number) {
+    this.spawn.starAttractorEatCount = value;
+  }
+
+  private get starAttractorNeedIndex(): number {
+    return this.spawn.starAttractorNeedIndex;
+  }
+
+  private set starAttractorNeedIndex(value: number) {
+    this.spawn.starAttractorNeedIndex = value;
+  }
+
+  private get starAttractorNeed(): number {
+    return this.spawn.starAttractorNeed;
+  }
+
+  private set starAttractorNeed(value: number) {
+    this.spawn.starAttractorNeed = value;
+  }
+
+  private get starAttractorSpawnPending(): boolean {
+    return this.spawn.starAttractorSpawnPending;
+  }
+
+  private set starAttractorSpawnPending(value: boolean) {
+    this.spawn.starAttractorSpawnPending = value;
+  }
+
+  private get starBeastNextSpawnCheckAt(): number {
+    return this.spawn.starBeastNextSpawnCheckAt;
+  }
+
+  private set starBeastNextSpawnCheckAt(value: number) {
+    this.spawn.starBeastNextSpawnCheckAt = value;
+  }
+
+  private get starBeastRespawnLockUntil(): number {
+    return this.spawn.starBeastRespawnLockUntil;
+  }
+
+  private set starBeastRespawnLockUntil(value: number) {
+    this.spawn.starBeastRespawnLockUntil = value;
+  }
+
+  private get foodWaveBag(): FoodWaveKind[] {
+    return this.spawn.foodWaveBag;
+  }
+
+  private set foodWaveBag(value: FoodWaveKind[]) {
+    this.spawn.foodWaveBag = value;
+  }
+
+  private get foodWaveNextSpawnAt(): number {
+    return this.spawn.foodWaveNextSpawnAt;
+  }
+
+  private set foodWaveNextSpawnAt(value: number) {
+    this.spawn.foodWaveNextSpawnAt = value;
+  }
+
+  private get nextStarAttractorId(): number {
+    return this.spawn.nextStarAttractorId;
+  }
+
+  private set nextStarAttractorId(value: number) {
+    this.spawn.nextStarAttractorId = value;
+  }
+
+  private get nextStarAttractorEffectId(): number {
+    return this.spawn.nextStarAttractorEffectId;
+  }
+
+  private set nextStarAttractorEffectId(value: number) {
+    this.spawn.nextStarAttractorEffectId = value;
+  }
+
+  private get nextStarBeastId(): number {
+    return this.spawn.nextStarBeastId;
+  }
+
+  private set nextStarBeastId(value: number) {
+    this.spawn.nextStarBeastId = value;
+  }
+
+  private get nextStarCoreId(): number {
+    return this.spawn.nextStarCoreId;
+  }
+
+  private set nextStarCoreId(value: number) {
+    this.spawn.nextStarCoreId = value;
+  }
+
+  private get nextStarBeastEffectId(): number {
+    return this.spawn.nextStarBeastEffectId;
+  }
+
+  private set nextStarBeastEffectId(value: number) {
+    this.spawn.nextStarBeastEffectId = value;
+  }
 
   public constructor(options: GameOptions) {
     this.canvas = options.canvas;
@@ -803,54 +1087,23 @@ export class Game {
   }
 
   private resetRun(phase: GamePhase): void {
-    this.phase = phase;
-    this.score = 0;
-    this.coresEaten = 0;
-    this.direction = "right";
-    this.directionQueue = [];
-    this.isBoosting = false;
+    this.lifecycle = createLifecycleState(phase);
+    this.movement = createMovementState();
+    this.timing = resetTimingState(createTimingState());
+    this.speedRuntime = createSpeedState();
+    this.entities = createEntityState();
+    this.progress = createProgressState(this.highScore);
+    this.spawn = createSpawnState();
+    this.inputState = createInputState();
     this.activeDirectionalInputs.clear();
     this.activeSpeedInputs.clear();
-    this.activeInputSequence = 0;
-    this.speedCue = null;
-    this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
-    this.lastMovementSpeedMode = "base";
-    this.stepAccumulator = 0;
-    this.playElapsed = 0;
-    this.movementTick = 0;
-    this.pendingGrowthSegments = 0;
-    this.starAttractorEatCount = 0;
-    this.starAttractorNeedIndex = 0;
-    this.starAttractorNeed = STAR_ATTRACTOR_ENABLED ? rollStarAttractorNeed(this.starAttractorNeedIndex) : 0;
-    this.starAttractorSpawnPending = false;
-    this.starBeastNextSpawnCheckAt = 0;
-    this.starBeastRespawnLockUntil = 0;
-    this.foodWaveBag = [];
-    this.foodWaveNextSpawnAt = FOOD_WAVE_INTERVAL_MS;
-    this.nextStarAttractorId = 1;
-    this.nextStarAttractorEffectId = 1;
-    this.nextStarBeastId = 1;
-    this.nextStarCoreId = 1;
-    this.nextStarBeastEffectId = 1;
-    this.blackHoleGravityState = { key: null, charge: 0 };
-    this.blackHoleAlert = null;
-    this.blackHoleCue = null;
-    this.blackHoleRecoveryDirection = null;
-    this.livesRemaining = DEFAULT_LIVES;
-    this.deathReason = null;
-    this.reviving = false;
-    this.reviveEndsAt = 0;
-    this.wallGrace = null;
-    this.rewardBurstOrigin = null;
-    this.snake = this.createStartingSnake();
-    this.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
-    this.starAttractors = [];
-    this.starAttractorEffects = [];
-    this.starBeasts = [];
-    this.starCores = [];
-    this.starBeastEffects = [];
-    this.blackHoles = [];
-    this.foods = this.createFoods();
+    this.entities.snake = this.createStartingSnake();
+    this.lifecycle.birthCell = this.entities.snake[0] ? { ...this.entities.snake[0] } : { column: 0, row: 0 };
+    this.entities.foods = this.createFoods();
+    this.progress.score = 0;
+    this.progress.coresEaten = 0;
+    this.spawn.starAttractorNeed = STAR_ATTRACTOR_ENABLED ? rollStarAttractorNeed(this.spawn.starAttractorNeedIndex) : 0;
+    this.speedRuntime.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
     this.rebuildSnakeOccupancy();
     this.syncUi(true);
   }
@@ -977,22 +1230,6 @@ export class Game {
       ...this.starCores.map((core) => ({ column: Math.floor(core.x), row: Math.floor(core.y) })),
       ...this.blackHoles.map((blackHole) => blackHole.cell),
     ];
-  }
-
-  private getDeathReasonText(reason: DeathReason | null = this.deathReason): string {
-    if (reason) {
-      return DEATH_REASON_LABELS[reason];
-    }
-
-    return "本局已结束";
-  }
-
-  private getReviveCountdownSeconds(): number {
-    if (!this.reviving) {
-      return 0;
-    }
-
-    return Math.max(1, Math.ceil((this.reviveEndsAt - this.elapsed) / 1000));
   }
 
   private createStartingSnake(): GridCell[] {
@@ -2493,95 +2730,44 @@ export class Game {
     return getFallbackTopMargin(size);
   }
 
-  private getSpeedCueSnapshot(): GameSnapshot["speedCue"] {
-    if (!this.speedCue) {
-      return null;
-    }
-
-    const age = this.elapsed - this.speedCue.startedAt;
-
-    if (age >= SPEED_CUE_DURATION_MS) {
-      return null;
-    }
-
-    return {
-      mode: this.speedCue.mode,
-      anchor: { ...this.speedCue.anchor },
-      startedAt: this.speedCue.startedAt,
-      fadeProgress: Math.max(0, Math.min(1, age / SPEED_CUE_DURATION_MS)),
-    };
-  }
-
   private updateTickerUi(): void {
     if (this.elapsed - this.lastTickerUpdate < 75) {
       return;
     }
 
     this.lastTickerUpdate = this.elapsed;
-    const cycleIndex = Math.floor(this.elapsed / HUD_TICKER_INTERVAL_MS);
-    const cycleProgress = this.elapsed - cycleIndex * HUD_TICKER_INTERVAL_MS;
-    const currentIndex = cycleIndex % HUD_TICKER_LINES.length;
-    const nextIndex = (currentIndex + 1) % HUD_TICKER_LINES.length;
-    const crossfadeStart = HUD_TICKER_INTERVAL_MS - HUD_TICKER_FADE_MS;
-    const isCrossfading = cycleProgress >= crossfadeStart;
-    const fadeProgress = isCrossfading
-      ? Math.max(0, Math.min(1, (cycleProgress - crossfadeStart) / HUD_TICKER_FADE_MS))
-      : 0;
-    const nextState = this.getOrCreateUiSyncState();
-    const currentText = HUD_TICKER_LINES[currentIndex] ?? "";
-    const nextText = HUD_TICKER_LINES[nextIndex] ?? "";
-    const currentOpacity = (1 - fadeProgress).toFixed(3);
-    const nextOpacity = fadeProgress.toFixed(3);
-
-    if (nextState.tickerCurrentText !== currentText) {
-      this.ui.tickerCurrentLabel.textContent = currentText;
-      nextState.tickerCurrentText = currentText;
-    }
-
-    if (nextState.tickerNextText !== nextText) {
-      this.ui.tickerNextLabel.textContent = nextText;
-      nextState.tickerNextText = nextText;
-    }
-
-    if (nextState.tickerCurrentOpacity !== currentOpacity) {
-      this.ui.tickerCurrentLabel.style.opacity = currentOpacity;
-      nextState.tickerCurrentOpacity = currentOpacity;
-    }
-
-    if (nextState.tickerNextOpacity !== nextOpacity) {
-      this.ui.tickerNextLabel.style.opacity = nextOpacity;
-      nextState.tickerNextOpacity = nextOpacity;
-    }
+    applyTickerUiModel(this.ui, this.uiSyncState, buildTickerUiModel({ elapsed: this.elapsed }));
   }
 
   private createSnapshot(): GameSnapshot {
-    const movementSpeed = this.currentMovementSpeed;
-
-    return {
+    return buildGameSnapshot({
       phase: this.phase,
       grid: this.grid,
       snake: this.snake,
       foods: this.foods,
-      starAttractors: STAR_ATTRACTOR_ENABLED ? this.starAttractors : [],
-      starAttractorEffects: STAR_ATTRACTOR_ENABLED ? this.starAttractorEffects : [],
+      starAttractors: this.starAttractors,
+      starAttractorEffects: this.starAttractorEffects,
       starBeasts: this.starBeasts,
       starCores: this.starCores,
       starBeastEffects: this.starBeastEffects,
       blackHoles: this.blackHoles,
       blackHoleAlert: this.blackHoleAlert,
       blackHoleCue: this.blackHoleCue,
-      rewardBurstOrigin: this.rewardBurstOrigin ? { ...this.rewardBurstOrigin } : null,
+      rewardBurstOrigin: this.rewardBurstOrigin,
       score: this.score,
       highScore: this.highScore,
       livesRemaining: this.livesRemaining,
       deathReason: this.deathReason,
       direction: this.direction,
-      speedMode: movementSpeed.mode,
-      speedMultiplier: movementSpeed.multiplier,
-      speedCue: this.getSpeedCueSnapshot(),
+      speedMode: this.currentMovementSpeed.mode,
+      speedMultiplier: this.currentMovementSpeed.multiplier,
+      speedCue: this.speedCue,
+      reviving: this.reviving,
+      reviveEndsAt: this.reviveEndsAt,
+      elapsed: this.elapsed,
       wallGrace: this.wallGrace,
-      reviveCountdownSeconds: this.getReviveCountdownSeconds(),
-    };
+      includeStarAttractor: STAR_ATTRACTOR_ENABLED,
+    });
   }
 
   public getUnlockedFeatures(): UnlockedFeatures {
@@ -2603,193 +2789,22 @@ export class Game {
     }
 
     this.lastUiUpdate = this.elapsed;
-    const hasUiCache = this.uiSyncState !== null;
     const size = measuredSize ?? this.renderer.getSize();
-    const unlockCopy = getNextLengthUnlockCopy(this.getProgress());
-    const isReady = this.phase === "ready";
-    const isRevivePrompt = this.phase === "revivePrompt";
-    const isReviving = this.phase === "reviving";
-    const isGameOver = this.phase === "gameOver";
-    const currentLength = this.snake.length.toString();
-    const currentLengthDisplay = `${currentLength}/100`;
-    const nextState = this.getOrCreateUiSyncState();
-    const rootPhase = this.phase;
-    const boardTop = `${this.grid.offsetY}px`;
-    const startPanelHidden = !(isReady || isGameOver || isRevivePrompt);
-    const startButtonText = isReady ? "开始游戏" : isGameOver ? "重开" : "复活";
-    const startButtonAriaLabel = isReady ? "开始游戏" : isGameOver ? "重新开始" : "确认复活";
-    const startButtonDisabled = isReviving;
-    const pauseButtonDisabled = this.phase !== "playing" && this.phase !== "paused";
-    const pauseButtonText = this.phase === "paused" ? "▶" : "❚❚";
-    const pauseButtonAriaLabel = this.phase === "paused" ? "继续游戏" : "暂停游戏";
-    const panelPrimaryLabel = isReady ? "准备开始" : "当前/目标长度";
-    const panelPrimaryValue = isReady ? "NEON SERPENT" : currentLengthDisplay;
-    const panelSecondaryLabel = isReady ? "霓虹吞星" : this.getDeathReasonText();
-    const panelMetaHidden = isRevivePrompt;
-    const panelMetaLabel = isReady
-      ? "长按方向键加速·长按Shift减速"
-      : isGameOver
-        ? "按开始重开"
-        : isReviving
-          ? `${this.getReviveCountdownSeconds()} 秒后开始`
-          : "";
-    const lengthLabel = currentLengthDisplay;
-    const unlockTitleLabel = unlockCopy.title;
-    const unlockValueLabel = unlockCopy.value;
-    const stateLabel = PHASE_LABELS[this.phase];
-    const fpsLabel = `${this.lastFps || "--"} FPS`;
-    const sizeLabel = `${size.width} x ${size.height} @${size.dpr.toFixed(1)}`;
+    const progress = this.getProgress();
+    const model = buildUiSyncModel({
+      phase: this.phase,
+      grid: this.grid,
+      progress,
+      livesRemaining: this.livesRemaining,
+      lastFps: this.lastFps,
+      size,
+      deathReason: this.deathReason,
+      reviving: this.reviving,
+      reviveEndsAt: this.reviveEndsAt,
+      elapsed: this.elapsed,
+      lifeHeartCount: this.ui.lifeHearts.length,
+    });
 
-    if (!hasUiCache || nextState.rootPhase !== rootPhase) {
-      this.ui.root.dataset.phase = rootPhase;
-      nextState.rootPhase = rootPhase;
-    }
-
-    if (!hasUiCache || nextState.boardTop !== boardTop) {
-      this.ui.root.style.setProperty("--board-top", boardTop);
-      nextState.boardTop = boardTop;
-    }
-
-    if (!hasUiCache || nextState.startPanelHidden !== startPanelHidden) {
-      this.ui.startPanel.hidden = startPanelHidden;
-      nextState.startPanelHidden = startPanelHidden;
-    }
-
-    if (!hasUiCache || nextState.startButtonText !== startButtonText) {
-      this.ui.startButton.textContent = startButtonText;
-      nextState.startButtonText = startButtonText;
-    }
-
-    if (!hasUiCache || nextState.startButtonAriaLabel !== startButtonAriaLabel) {
-      this.ui.startButton.setAttribute("aria-label", startButtonAriaLabel);
-      nextState.startButtonAriaLabel = startButtonAriaLabel;
-    }
-
-    if (!hasUiCache || nextState.startButtonDisabled !== startButtonDisabled) {
-      this.ui.startButton.disabled = startButtonDisabled;
-      nextState.startButtonDisabled = startButtonDisabled;
-    }
-
-    if (!hasUiCache || nextState.pauseButtonDisabled !== pauseButtonDisabled) {
-      this.ui.pauseButton.disabled = pauseButtonDisabled;
-      nextState.pauseButtonDisabled = pauseButtonDisabled;
-    }
-
-    if (!hasUiCache || nextState.pauseButtonText !== pauseButtonText) {
-      this.ui.pauseButton.textContent = pauseButtonText;
-      nextState.pauseButtonText = pauseButtonText;
-    }
-
-    if (!hasUiCache || nextState.pauseButtonAriaLabel !== pauseButtonAriaLabel) {
-      this.ui.pauseButton.setAttribute("aria-label", pauseButtonAriaLabel);
-      nextState.pauseButtonAriaLabel = pauseButtonAriaLabel;
-    }
-
-    if (!hasUiCache || nextState.panelPrimaryLabel !== panelPrimaryLabel) {
-      this.ui.panelPrimaryLabel.textContent = panelPrimaryLabel;
-      nextState.panelPrimaryLabel = panelPrimaryLabel;
-    }
-
-    if (!hasUiCache || nextState.panelPrimaryValue !== panelPrimaryValue) {
-      this.ui.panelPrimaryValue.textContent = panelPrimaryValue;
-      nextState.panelPrimaryValue = panelPrimaryValue;
-    }
-
-    if (!hasUiCache || nextState.panelSecondaryLabel !== panelSecondaryLabel) {
-      this.ui.panelSecondaryLabel.textContent = panelSecondaryLabel;
-      nextState.panelSecondaryLabel = panelSecondaryLabel;
-    }
-
-    if (!hasUiCache || nextState.panelMetaHidden !== panelMetaHidden) {
-      this.ui.panelMetaLabel.hidden = panelMetaHidden;
-      nextState.panelMetaHidden = panelMetaHidden;
-    }
-
-    if (!hasUiCache || nextState.panelMetaLabel !== panelMetaLabel) {
-      this.ui.panelMetaLabel.textContent = panelMetaLabel;
-      nextState.panelMetaLabel = panelMetaLabel;
-    }
-
-    for (let index = 0; index < this.ui.lifeHearts.length; index += 1) {
-      const heart = this.ui.lifeHearts[index];
-      const active = index < this.livesRemaining ? "true" : "false";
-
-      if (!heart) {
-        continue;
-      }
-
-      if (!hasUiCache || nextState.lifeHeartActiveStates[index] !== active) {
-        heart.dataset.active = active;
-        nextState.lifeHeartActiveStates[index] = active;
-      }
-    }
-
-    nextState.lifeHeartActiveStates.length = this.ui.lifeHearts.length;
-
-    if (!hasUiCache || nextState.lengthLabel !== lengthLabel) {
-      this.ui.lengthLabel.textContent = lengthLabel;
-      nextState.lengthLabel = lengthLabel;
-    }
-
-    if (!hasUiCache || nextState.unlockTitleLabel !== unlockTitleLabel) {
-      this.ui.unlockTitleLabel.textContent = unlockTitleLabel;
-      nextState.unlockTitleLabel = unlockTitleLabel;
-    }
-
-    if (!hasUiCache || nextState.unlockValueLabel !== unlockValueLabel) {
-      this.ui.unlockValueLabel.textContent = unlockValueLabel;
-      nextState.unlockValueLabel = unlockValueLabel;
-    }
-
-    if (!hasUiCache || nextState.stateLabel !== stateLabel) {
-      this.ui.stateLabel.textContent = stateLabel;
-      nextState.stateLabel = stateLabel;
-    }
-
-    if (!hasUiCache || nextState.fpsLabel !== fpsLabel) {
-      this.ui.fpsLabel.textContent = fpsLabel;
-      nextState.fpsLabel = fpsLabel;
-    }
-
-    if (!hasUiCache || nextState.sizeLabel !== sizeLabel) {
-      this.ui.sizeLabel.textContent = sizeLabel;
-      nextState.sizeLabel = sizeLabel;
-    }
-  }
-
-  private getOrCreateUiSyncState(): UiSyncState {
-    if (this.uiSyncState) {
-      return this.uiSyncState;
-    }
-
-    this.uiSyncState = {
-      rootPhase: "",
-      boardTop: "",
-      startPanelHidden: false,
-      startButtonText: "",
-      startButtonAriaLabel: "",
-      startButtonDisabled: false,
-      pauseButtonDisabled: false,
-      pauseButtonText: "",
-      pauseButtonAriaLabel: "",
-      panelPrimaryLabel: "",
-      panelPrimaryValue: "",
-      panelSecondaryLabel: "",
-      panelMetaHidden: false,
-      panelMetaLabel: "",
-      lifeHeartActiveStates: [],
-      lengthLabel: "",
-      unlockTitleLabel: "",
-      unlockValueLabel: "",
-      stateLabel: "",
-      fpsLabel: "",
-      sizeLabel: "",
-      tickerCurrentText: "",
-      tickerNextText: "",
-      tickerCurrentOpacity: "",
-      tickerNextOpacity: "",
-    };
-
-    return this.uiSyncState;
+    applyUiSyncModel(this.ui, this.uiSyncState, model);
   }
 }

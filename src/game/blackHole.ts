@@ -1,4 +1,6 @@
 import { findStage0SafeSpawnPosition } from "./spawn";
+import { OPPOSITE_DIRECTIONS, PERPENDICULAR_PAIRS } from "./direction";
+import { cellKey, chebyshevDistance, isCellInsideZone, isInsideGrid } from "./gridMath";
 import type { GameProgress, SafeSpawnZone } from "./progression";
 import type { BlackHole, BlackHoleAlert, BlackHoleBand, BlackHoleCue, BlackHoleKind, Direction, GridCell, GridMetrics } from "./types";
 
@@ -71,13 +73,6 @@ const DIRECTION_VECTORS: Record<Direction, { x: number; y: number }> = {
   right: { x: 1, y: 0 },
   down: { x: 0, y: 1 },
   left: { x: -1, y: 0 },
-};
-
-const PERPENDICULAR_PAIRS: Record<Direction, readonly [Direction, Direction]> = {
-  up: ["left", "right"],
-  right: ["up", "down"],
-  down: ["right", "left"],
-  left: ["down", "up"],
 };
 
 const KIND_PRIORITY: Record<BlackHoleKind, number> = {
@@ -369,7 +364,7 @@ export function getBlackHoleBandForCell(cell: GridCell, blackHole: BlackHole, cu
     return null;
   }
 
-  const distance = getChebyshevDistance(cell, blackHole.cell);
+  const distance = chebyshevDistance(cell, blackHole.cell);
   const variant = getBlackHoleVariant(blackHole.kind);
   const bandThresholds = variant.bandThresholds;
 
@@ -523,7 +518,7 @@ function chooseDominantInfluence(
       continue;
     }
 
-    const distance = getChebyshevDistance(head, blackHole.cell);
+    const distance = chebyshevDistance(head, blackHole.cell);
     candidates.push({
       blackHole,
       key: getBlackHoleKey(blackHole),
@@ -577,7 +572,7 @@ function chooseDominantAlert(
 
     const influenceRadius = getBlackHoleInfluenceRadiusCells(blackHole);
     const alertRadius = getBlackHoleAlertRadiusCells(blackHole);
-    const distance = getChebyshevDistance(head, blackHole.cell);
+    const distance = chebyshevDistance(head, blackHole.cell);
 
     if (distance <= influenceRadius || distance > alertRadius) {
       continue;
@@ -674,7 +669,7 @@ function isBlackHoleCandidateSafe(
     return false;
   }
 
-  if (dangerZones.some((zone) => isInDangerZone(candidate, zone))) {
+  if (dangerZones.some((zone) => isCellInsideZone(candidate, zone))) {
     return false;
   }
 
@@ -755,32 +750,12 @@ function isWallUnsafe(cell: GridCell, grid: GridMetrics, padding: number): boole
   );
 }
 
-function isNear(cell: GridCell, center: GridCell, radius: number): boolean {
-  if (radius <= 0) {
-    return false;
-  }
-
-  return Math.max(Math.abs(cell.row - center.row), Math.abs(cell.column - center.column)) <= radius;
-}
-
-function isInDangerZone(cell: GridCell, zone: SafeSpawnZone): boolean {
-  return isNear(cell, zone.center, Math.max(0, Math.floor(zone.radius)));
-}
-
-function isInsideGrid(cell: GridCell, grid: GridMetrics): boolean {
-  return cell.column >= 0 && cell.row >= 0 && cell.column < grid.columns && cell.row < grid.rows;
-}
-
 function getBandPriority(band: BlackHoleBand): number {
   return BAND_PRIORITY[band];
 }
 
 function getKindPriority(kind: BlackHoleKind): number {
   return KIND_PRIORITY[kind];
-}
-
-function getChebyshevDistance(left: GridCell, right: GridCell): number {
-  return Math.max(Math.abs(left.column - right.column), Math.abs(left.row - right.row));
 }
 
 function dot(vector: { x: number; y: number }, target: { x: number; y: number }): number {
@@ -790,14 +765,3 @@ function dot(vector: { x: number; y: number }, target: { x: number; y: number })
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
-
-function cellKey(cell: GridCell): string {
-  return `${cell.column}:${cell.row}`;
-}
-
-const OPPOSITE_DIRECTIONS: Record<Direction, Direction> = {
-  up: "down",
-  right: "left",
-  down: "up",
-  left: "right",
-};

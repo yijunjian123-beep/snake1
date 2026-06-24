@@ -1,4 +1,6 @@
 import { getBlackHoleSpawnExclusionRadiusCells } from "./blackHole";
+import { getDirectionDelta } from "./direction";
+import { cellKey, chebyshevDistance } from "./gridMath";
 import { findSafeSpawnPosition } from "./spawn";
 import type { GameProgress, SafeSpawnZone } from "./progression";
 import type { BlackHole, Direction, GridCell, GridMetrics, StarAttractor, StarBeast } from "./types";
@@ -37,29 +39,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function cellKey(cell: GridCell): string {
-  return `${cell.column}:${cell.row}`;
-}
-
-function chebyshevDistance(left: GridCell, right: GridCell): number {
-  return Math.max(Math.abs(left.column - right.column), Math.abs(left.row - right.row));
-}
-
-function directionDelta(direction: Direction): GridCell {
-  switch (direction) {
-    case "up":
-      return { column: 0, row: -1 };
-    case "right":
-      return { column: 1, row: 0 };
-    case "down":
-      return { column: 0, row: 1 };
-    case "left":
-      return { column: -1, row: 0 };
-  }
-}
-
 function isDirectFrontCell(candidate: GridCell, head: GridCell, direction: Direction): boolean {
-  const delta = directionDelta(direction);
+  const delta = getDirectionDelta(direction);
 
   return candidate.column === head.column + delta.column && candidate.row === head.row + delta.row;
 }

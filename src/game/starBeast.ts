@@ -1,5 +1,7 @@
 import { getBlackHoleBandForCell, getBlackHoleSpawnExclusionRadiusCells, isBlackHoleCollision } from "./blackHole";
+import { CARDINAL_DIRECTIONS, OPPOSITE_DIRECTIONS, getDirectionDelta, stepCell, turnLeft, turnRight } from "./direction";
 import { findSafeSpawnPosition } from "./spawn";
+import { cellKey, cellsMatch, isInsideGrid, isWithinChebyshevRadius, manhattanDistance } from "./gridMath";
 import type { GameProgress } from "./progression";
 import type {
   BlackHole,
@@ -129,80 +131,16 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function cellKey(cell: GridCell): string {
-  return `${cell.column}:${cell.row}`;
-}
-
-function cellsMatch(left: GridCell, right: GridCell): boolean {
-  return left.column === right.column && left.row === right.row;
-}
-
-function manhattanDistance(left: GridCell, right: GridCell): number {
-  return Math.abs(left.column - right.column) + Math.abs(left.row - right.row);
-}
-
-function isInsideGrid(cell: GridCell, grid: GridMetrics): boolean {
-  return cell.column >= 0 && cell.row >= 0 && cell.column < grid.columns && cell.row < grid.rows;
-}
-
 function isNear(cell: GridCell, center: GridCell, radius: number): boolean {
-  if (radius <= 0) {
-    return false;
-  }
-
-  return Math.max(Math.abs(cell.column - center.column), Math.abs(cell.row - center.row)) <= radius;
-}
-
-function turnLeft(direction: Direction): Direction {
-  switch (direction) {
-    case "up":
-      return "left";
-    case "left":
-      return "down";
-    case "down":
-      return "right";
-    case "right":
-      return "up";
-  }
-}
-
-function turnRight(direction: Direction): Direction {
-  switch (direction) {
-    case "up":
-      return "right";
-    case "right":
-      return "down";
-    case "down":
-      return "left";
-    case "left":
-      return "up";
-  }
-}
-
-function getDirectionDelta(direction: Direction): GridCell {
-  switch (direction) {
-    case "up":
-      return { column: 0, row: -1 };
-    case "right":
-      return { column: 1, row: 0 };
-    case "down":
-      return { column: 0, row: 1 };
-    case "left":
-      return { column: -1, row: 0 };
-  }
+  return isWithinChebyshevRadius(cell, center, radius);
 }
 
 function getNextCell(cell: GridCell, direction: Direction): GridCell {
-  const delta = getDirectionDelta(direction);
-
-  return {
-    column: cell.column + delta.column,
-    row: cell.row + delta.row,
-  };
+  return stepCell(cell, direction);
 }
 
 function shuffleDirections(random: () => number): Direction[] {
-  const directions: Direction[] = ["up", "right", "down", "left"];
+  const directions: Direction[] = [...CARDINAL_DIRECTIONS];
 
   for (let index = directions.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(random() * (index + 1));
@@ -223,16 +161,7 @@ function rollRange(random: () => number, min: number, max: number): number {
 }
 
 function getReverseDirection(direction: Direction): Direction {
-  switch (direction) {
-    case "up":
-      return "down";
-    case "right":
-      return "left";
-    case "down":
-      return "up";
-    case "left":
-      return "right";
-  }
+  return OPPOSITE_DIRECTIONS[direction];
 }
 
 function getBlackHoleDangerZones(blackHoles: readonly BlackHole[]): Array<{ center: GridCell; radius: number }> {

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "build:pages": "vite build",
-    "test": "node --test --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs tests/starBeast.test.ts",
+    "test": "node --test --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs tests/*.test.ts",
     "preview": "vite preview --host 0.0.0.0"
   },
   "devDependencies": {
