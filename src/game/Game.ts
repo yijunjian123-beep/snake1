@@ -37,6 +37,7 @@ import { createRenderer } from "./render";
 import { readHighScore, writeHighScore } from "./storage";
 import type {
   BlackHole,
+  BlackHoleCue,
   CanvasSize,
   Direction,
   GamePhase,
@@ -284,6 +285,46 @@ interface MovementSpeedState {
   stepMs: number;
 }
 
+interface UiSyncState {
+  rootPhase: string;
+  boardTop: string;
+  startPanelHidden: boolean;
+  startButtonText: string;
+  startButtonAriaLabel: string;
+  startButtonDisabled: boolean;
+  pauseButtonDisabled: boolean;
+  pauseButtonText: string;
+  pauseButtonAriaLabel: string;
+  panelPrimaryLabel: string;
+  panelPrimaryValue: string;
+  panelSecondaryLabel: string;
+  panelMetaHidden: boolean;
+  panelMetaLabel: string;
+  lifeHeartActiveStates: string[];
+  lengthLabel: string;
+  unlockTitleLabel: string;
+  unlockValueLabel: string;
+  stateLabel: string;
+  fpsLabel: string;
+  sizeLabel: string;
+  tickerCurrentText: string;
+  tickerNextText: string;
+  tickerCurrentOpacity: string;
+  tickerNextOpacity: string;
+}
+
+interface SnakeAdvanceEvaluation {
+  nextHead: GridCell;
+  ateFoodIndex: number;
+  ateStarCoreIndex: number;
+  ateStarAttractorIndex: number;
+  growthBeforeMove: number;
+  shouldKeepTail: boolean;
+  isOutOfBounds: boolean;
+  collidesWithSelf: boolean;
+  canAdvance: boolean;
+}
+
 export class Game {
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: GameUiElements;
@@ -316,6 +357,7 @@ export class Game {
   private birthCell: GridCell = { column: 0, row: 0 };
   private direction: Direction = "right";
   private directionQueue: Direction[] = [];
+  private snakeOccupancy = new Uint8Array(0);
   private score = 0;
   private coresEaten = 0;
   private rewardBurstOrigin: GridCell | null = null;
@@ -332,6 +374,8 @@ export class Game {
   private isBoosting = false;
   private speedCue: SpeedCueState | null = null;
   private lastMovementSpeedMode: SpeedMode = "base";
+  private currentMovementSpeed: MovementSpeedState = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
+  private uiSyncState: UiSyncState | null = null;
   private activeInputSequence = 0;
   private pendingGrowthSegments = 0;
   private starAttractorEatCount = 0;
@@ -411,6 +455,7 @@ export class Game {
 
       if (this.phase === "playing") {
         let movementSpeed = this.getMovementSpeedState();
+        this.currentMovementSpeed = movementSpeed;
         this.updateSpeedCueState(movementSpeed);
 
         if (!this.wallGrace) {
@@ -429,6 +474,7 @@ export class Game {
             }
 
             movementSpeed = this.getMovementSpeedState();
+            this.currentMovementSpeed = movementSpeed;
             this.updateSpeedCueState(movementSpeed);
           }
         }
@@ -438,7 +484,10 @@ export class Game {
         }
       }
     } else if (this.phase === "reviving") {
+      this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
       this.updateReviveState();
+    } else {
+      this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
     }
 
     this.renderer.recordFrameTime(frameDelta);
@@ -464,6 +513,8 @@ export class Game {
 
     if ((this.phase === "playing" || this.phase === "paused" || this.phase === "ready") && !this.isCurrentPlacementValid()) {
       this.resetRun(this.phase === "paused" ? "paused" : this.phase);
+    } else {
+      this.rebuildSnakeOccupancy();
     }
 
     this.syncUi(true, size);
@@ -726,19 +777,7 @@ export class Game {
         return;
       }
 
-      const head = this.snake[0];
-
-      if (!head) {
-        return;
-      }
-
-      const delta = DIRECTION_DELTAS[direction];
-      const nextCell: GridCell = {
-        column: head.column + delta.column,
-        row: head.row + delta.row,
-      };
-
-      if (this.isOutOfBounds(nextCell)) {
+      if (!this.canAdvanceDirection(direction)) {
         return;
       }
 
@@ -756,6 +795,10 @@ export class Game {
       return;
     }
 
+    if (!this.canAdvanceDirection(direction)) {
+      return;
+    }
+
     this.directionQueue.push(direction);
   }
 
@@ -770,6 +813,7 @@ export class Game {
     this.activeSpeedInputs.clear();
     this.activeInputSequence = 0;
     this.speedCue = null;
+    this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
     this.lastMovementSpeedMode = "base";
     this.stepAccumulator = 0;
     this.playElapsed = 0;
@@ -807,6 +851,7 @@ export class Game {
     this.starBeastEffects = [];
     this.blackHoles = [];
     this.foods = this.createFoods();
+    this.rebuildSnakeOccupancy();
     this.syncUi(true);
   }
 
@@ -871,6 +916,7 @@ export class Game {
     this.snake = placement.cells;
     this.birthCell = this.snake[0] ? { ...this.snake[0] } : this.birthCell;
     this.direction = placement.direction;
+    this.rebuildSnakeOccupancy();
     this.resetTransientRunState();
   }
 
@@ -1263,9 +1309,7 @@ export class Game {
   }
 
   private advanceSnake(): void {
-    const head = this.snake[0];
-
-    if (!head) {
+    if (!this.snake[0]) {
       this.finishGameOver("unknown");
       return;
     }
@@ -1274,10 +1318,11 @@ export class Game {
 
     if (recoveryDirection !== null) {
       this.movementTick += 1;
+      const selection = this.pickAdvanceDirection(recoveryDirection, [this.direction]);
       this.blackHoleRecoveryDirection = null;
       this.blackHoleGravityState = { key: null, charge: 0 };
-      this.blackHoleCue = null;
-      this.direction = recoveryDirection;
+      this.blackHoleCue = selection.primaryBlocked ? this.createBlockedBlackHoleCue(this.blackHoleCue) : null;
+      this.direction = selection.direction;
       this.commitSnakeStep();
       return;
     }
@@ -1300,18 +1345,18 @@ export class Game {
     }
 
     this.movementTick += 1;
+    const movementDirection = this.pickAdvanceDirection(intendedDirection, [this.direction]).direction;
     const currentTime = this.elapsed / 1000;
     const resolution = resolveBlackHoleMovement(
       head,
-      intendedDirection,
+      movementDirection,
       this.direction,
       this.blackHoles,
       currentTime,
       this.blackHoleGravityState,
     );
 
-    this.blackHoleGravityState = resolution.nextGravityState;
-    this.blackHoleCue = resolution.cue;
+    const pullBlocked = resolution.shouldPlayPull && !this.canAdvanceDirection(resolution.finalDirection);
 
     if (resolution.shouldDie) {
       this.direction = resolution.finalDirection;
@@ -1319,44 +1364,48 @@ export class Game {
       return;
     }
 
-    this.direction = resolution.finalDirection;
+    this.blackHoleGravityState = pullBlocked ? { key: null, charge: 0 } : resolution.nextGravityState;
+    this.blackHoleCue = pullBlocked ? this.createBlockedBlackHoleCue(resolution.cue) : resolution.cue;
+    this.direction = pullBlocked ? movementDirection : resolution.finalDirection;
 
-    if (resolution.shouldPlayPull) {
-      this.blackHoleRecoveryDirection = intendedDirection;
+    if (resolution.shouldPlayPull && !pullBlocked) {
+      this.blackHoleRecoveryDirection = movementDirection;
+    } else {
+      this.blackHoleRecoveryDirection = null;
     }
 
     this.commitSnakeStep();
   }
 
   private commitSnakeStep(): void {
-    const head = this.snake[0];
-
-    if (!head) {
+    if (!this.snake[0]) {
       this.finishGameOver("unknown");
       return;
     }
 
     const currentTime = this.elapsed / 1000;
-    const delta = DIRECTION_DELTAS[this.direction];
-    const nextHead: GridCell = {
-      column: head.column + delta.column,
-      row: head.row + delta.row,
-    };
-    const ateFoodIndex = this.foods.findIndex((food) => cellsMatch(nextHead, food));
-    const ateFood = ateFoodIndex !== -1;
-    const starAttractorIndex = STAR_ATTRACTOR_ENABLED ? this.findStarAttractorIndex(nextHead) : -1;
-    const ateStarAttractor = starAttractorIndex !== -1;
-    const starCoreIndex = this.findStarCoreIndex(nextHead);
-    const ateStarCore = starCoreIndex !== -1;
-    const growthBeforeMove = this.pendingGrowthSegments;
-    const shouldKeepTail = ateFood || ateStarCore || growthBeforeMove > 0;
+    const evaluation = this.evaluateSnakeAdvance(this.direction);
 
-    if (this.isOutOfBounds(nextHead)) {
+    if (!evaluation) {
+      this.finishGameOver("unknown");
+      return;
+    }
+
+    const {
+      nextHead,
+      ateFoodIndex,
+      ateStarCoreIndex,
+      ateStarAttractorIndex,
+      growthBeforeMove,
+      shouldKeepTail,
+    } = evaluation;
+
+    if (evaluation.isOutOfBounds) {
       this.startWallGrace(this.direction);
       return;
     }
 
-    if (this.collidesWithSelf(nextHead, shouldKeepTail)) {
+    if (evaluation.collidesWithSelf) {
       this.handlePlayerDeath("snake_body");
       return;
     }
@@ -1371,21 +1420,24 @@ export class Game {
       return;
     }
 
+    const previousTail = this.snake[this.snake.length - 1] ?? null;
     this.snake = [nextHead, ...this.snake];
+    this.adjustSnakeOccupancy(nextHead, 1);
 
-    if (ateFood) {
-      this.foods.splice(ateFoodIndex, 1);
-      this.handleCoreCollection(currentTime, 1, true, nextHead);
-    } else if (ateStarCore) {
-      this.starCores.splice(starCoreIndex, 1);
-      this.handleCoreCollection(currentTime, 1, false, nextHead);
-    } else if (ateStarAttractor) {
-      this.starAttractors.splice(starAttractorIndex, 1);
-      this.absorbStarAttractor(nextHead, currentTime);
+    if (!shouldKeepTail && previousTail) {
+      this.snake.pop();
+      this.adjustSnakeOccupancy(previousTail, -1);
     }
 
-    if (!shouldKeepTail) {
-      this.snake.pop();
+    if (ateFoodIndex !== -1) {
+      this.foods.splice(ateFoodIndex, 1);
+      this.handleCoreCollection(currentTime, 1, true, nextHead);
+    } else if (ateStarCoreIndex !== -1) {
+      this.starCores.splice(ateStarCoreIndex, 1);
+      this.handleCoreCollection(currentTime, 1, false, nextHead);
+    } else if (ateStarAttractorIndex !== -1) {
+      this.starAttractors.splice(ateStarAttractorIndex, 1);
+      this.absorbStarAttractor(nextHead, currentTime);
     }
 
     if (growthBeforeMove > 0) {
@@ -1655,6 +1707,7 @@ export class Game {
     }
 
     const dt = Math.min(delta / 1000, 0.05);
+    const dragExponent = delta / 16.67;
     const head = this.snake[0];
     const playerCenter = head
       ? {
@@ -1712,8 +1765,9 @@ export class Game {
       }
 
       const drag = ageMs < core.magnetDelayMs ? 0.98 : 0.94;
-      core.vx *= Math.pow(drag, delta / 16.67);
-      core.vy *= Math.pow(drag, delta / 16.67);
+      const dragFactor = Math.pow(drag, dragExponent);
+      core.vx *= dragFactor;
+      core.vy *= dragFactor;
 
       const maxSpeed = ageMs < core.magnetDelayMs ? 0.9 : 2.4;
       const speed = Math.hypot(core.vx, core.vy);
@@ -1753,6 +1807,7 @@ export class Game {
     }
 
     this.snake.push({ ...tail });
+    this.adjustSnakeOccupancy(tail, 1);
   }
 
   private updateStarBeastEffects(currentTime: number): void {
@@ -1796,6 +1851,108 @@ export class Game {
     }));
   }
 
+  private rebuildSnakeOccupancy(): void {
+    const cellCount = this.grid.columns * this.grid.rows;
+
+    if (this.snakeOccupancy.length !== cellCount) {
+      this.snakeOccupancy = new Uint8Array(cellCount);
+    } else {
+      this.snakeOccupancy.fill(0);
+    }
+
+    for (const segment of this.snake) {
+      this.adjustSnakeOccupancy(segment, 1);
+    }
+  }
+
+  private adjustSnakeOccupancy(cell: GridCell, delta: number): void {
+    const index = this.getSnakeCellIndex(cell);
+
+    if (index === null) {
+      return;
+    }
+
+    const currentValue = this.snakeOccupancy[index] ?? 0;
+    const nextValue = currentValue + delta;
+    this.snakeOccupancy[index] = Math.max(0, Math.min(255, nextValue));
+  }
+
+  private getSnakeCellIndex(cell: GridCell): number | null {
+    if (this.isOutOfBounds(cell)) {
+      return null;
+    }
+
+    return cell.row * this.grid.columns + cell.column;
+  }
+
+  private evaluateSnakeAdvance(direction: Direction): SnakeAdvanceEvaluation | null {
+    const head = this.snake[0];
+
+    if (!head) {
+      return null;
+    }
+
+    const delta = DIRECTION_DELTAS[direction];
+    const nextHead: GridCell = {
+      column: head.column + delta.column,
+      row: head.row + delta.row,
+    };
+    const ateFoodIndex = this.foods.findIndex((food) => cellsMatch(food, nextHead));
+    const ateStarCoreIndex = this.findStarCoreIndex(nextHead);
+    const ateStarAttractorIndex = STAR_ATTRACTOR_ENABLED ? this.findStarAttractorIndex(nextHead) : -1;
+    const growthBeforeMove = this.pendingGrowthSegments;
+    const shouldKeepTail = ateFoodIndex !== -1 || ateStarCoreIndex !== -1 || growthBeforeMove > 0;
+    const isOutOfBounds = this.isOutOfBounds(nextHead);
+    const collidesWithSelf = !isOutOfBounds && this.collidesWithSelf(nextHead, shouldKeepTail);
+
+    return {
+      nextHead,
+      ateFoodIndex,
+      ateStarCoreIndex,
+      ateStarAttractorIndex,
+      growthBeforeMove,
+      shouldKeepTail,
+      isOutOfBounds,
+      collidesWithSelf,
+      canAdvance: !isOutOfBounds && !collidesWithSelf,
+    };
+  }
+
+  private canAdvanceDirection(direction: Direction): boolean {
+    return this.evaluateSnakeAdvance(direction)?.canAdvance ?? false;
+  }
+
+  private pickAdvanceDirection(primary: Direction, fallbacks: readonly Direction[] = []): { direction: Direction; primaryBlocked: boolean } {
+    const primaryBlocked = !this.canAdvanceDirection(primary);
+    const candidates = [primary, ...fallbacks.filter((direction) => direction !== primary)];
+
+    for (const direction of candidates) {
+      if (this.canAdvanceDirection(direction)) {
+        return {
+          direction,
+          primaryBlocked,
+        };
+      }
+    }
+
+    return {
+      direction: primary,
+      primaryBlocked,
+    };
+  }
+
+  private createBlockedBlackHoleCue(cue: BlackHoleCue | null): BlackHoleCue | null {
+    if (!cue) {
+      return null;
+    }
+
+    return {
+      ...cue,
+      charge: 0,
+      isPulling: false,
+    };
+  }
+
   private findStarAttractorIndex(cell: GridCell): number {
     if (!STAR_ATTRACTOR_ENABLED) {
       return -1;
@@ -1805,7 +1962,21 @@ export class Game {
   }
 
   private collidesWithPlayerBody(cell: GridCell): boolean {
-    return this.snake.slice(1).some((segment) => cellsMatch(segment, cell));
+    const head = this.snake[0];
+
+    if (!head) {
+      return false;
+    }
+
+    const index = this.getSnakeCellIndex(cell);
+
+    if (index === null) {
+      return false;
+    }
+
+    const occupancy = this.snakeOccupancy[index] ?? 0;
+
+    return occupancy > 0 && !cellsMatch(head, cell);
   }
 
   private consumeStarCore(beast: StarBeast, starCoreIndex: number, currentTime: number): void {
@@ -2073,8 +2244,27 @@ export class Game {
   }
 
   private collidesWithSelf(cell: GridCell, willGrow: boolean): boolean {
-    const bodyToCheck = willGrow ? this.snake : this.snake.slice(0, -1);
-    return bodyToCheck.some((segment) => cellsMatch(segment, cell));
+    const index = this.getSnakeCellIndex(cell);
+
+    if (index === null) {
+      return false;
+    }
+
+    const occupancy = this.snakeOccupancy[index] ?? 0;
+
+    if (occupancy <= 0) {
+      return false;
+    }
+
+    if (!willGrow) {
+      const tail = this.snake[this.snake.length - 1];
+
+      if (tail && cellsMatch(tail, cell) && occupancy === 1) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private collidesWithBlackHole(cell: GridCell): boolean {
@@ -2115,9 +2305,7 @@ export class Game {
   }
 
   private getWallGraceRecoveryDirection(): Direction | null {
-    const head = this.snake[0];
-
-    if (!head) {
+    if (!this.snake[0]) {
       return null;
     }
 
@@ -2132,13 +2320,7 @@ export class Game {
         continue;
       }
 
-      const delta = DIRECTION_DELTAS[direction];
-      const candidate: GridCell = {
-        column: head.column + delta.column,
-        row: head.row + delta.row,
-      };
-
-      if (this.isOutOfBounds(candidate)) {
+      if (!this.canAdvanceDirection(direction)) {
         continue;
       }
 
@@ -2345,15 +2527,35 @@ export class Game {
     const fadeProgress = isCrossfading
       ? Math.max(0, Math.min(1, (cycleProgress - crossfadeStart) / HUD_TICKER_FADE_MS))
       : 0;
+    const nextState = this.getOrCreateUiSyncState();
+    const currentText = HUD_TICKER_LINES[currentIndex] ?? "";
+    const nextText = HUD_TICKER_LINES[nextIndex] ?? "";
+    const currentOpacity = (1 - fadeProgress).toFixed(3);
+    const nextOpacity = fadeProgress.toFixed(3);
 
-    this.ui.tickerCurrentLabel.textContent = HUD_TICKER_LINES[currentIndex] ?? "";
-    this.ui.tickerNextLabel.textContent = HUD_TICKER_LINES[nextIndex] ?? "";
-    this.ui.tickerCurrentLabel.style.opacity = (1 - fadeProgress).toFixed(3);
-    this.ui.tickerNextLabel.style.opacity = fadeProgress.toFixed(3);
+    if (nextState.tickerCurrentText !== currentText) {
+      this.ui.tickerCurrentLabel.textContent = currentText;
+      nextState.tickerCurrentText = currentText;
+    }
+
+    if (nextState.tickerNextText !== nextText) {
+      this.ui.tickerNextLabel.textContent = nextText;
+      nextState.tickerNextText = nextText;
+    }
+
+    if (nextState.tickerCurrentOpacity !== currentOpacity) {
+      this.ui.tickerCurrentLabel.style.opacity = currentOpacity;
+      nextState.tickerCurrentOpacity = currentOpacity;
+    }
+
+    if (nextState.tickerNextOpacity !== nextOpacity) {
+      this.ui.tickerNextLabel.style.opacity = nextOpacity;
+      nextState.tickerNextOpacity = nextOpacity;
+    }
   }
 
   private createSnapshot(): GameSnapshot {
-    const movementSpeed = this.getMovementSpeedState();
+    const movementSpeed = this.currentMovementSpeed;
 
     return {
       phase: this.phase,
@@ -2401,6 +2603,7 @@ export class Game {
     }
 
     this.lastUiUpdate = this.elapsed;
+    const hasUiCache = this.uiSyncState !== null;
     const size = measuredSize ?? this.renderer.getSize();
     const unlockCopy = getNextLengthUnlockCopy(this.getProgress());
     const isReady = this.phase === "ready";
@@ -2409,38 +2612,184 @@ export class Game {
     const isGameOver = this.phase === "gameOver";
     const currentLength = this.snake.length.toString();
     const currentLengthDisplay = `${currentLength}/100`;
-
-    this.ui.root.dataset.phase = this.phase;
-    this.ui.root.style.setProperty("--board-top", `${this.grid.offsetY}px`);
-    this.ui.startPanel.hidden = !(isReady || isGameOver || isRevivePrompt);
-    this.ui.startButton.textContent = isReady ? "开始游戏" : isGameOver ? "重开" : "复活";
-    this.ui.startButton.setAttribute(
-      "aria-label",
-      isReady ? "开始游戏" : isGameOver ? "重新开始" : "确认复活",
-    );
-    this.ui.startButton.disabled = isReviving;
-    this.ui.pauseButton.disabled = this.phase !== "playing" && this.phase !== "paused";
-    this.ui.pauseButton.textContent = this.phase === "paused" ? "▶" : "❚❚";
-    this.ui.pauseButton.setAttribute("aria-label", this.phase === "paused" ? "继续游戏" : "暂停游戏");
-    this.ui.panelPrimaryLabel.textContent = isReady ? "准备开始" : "当前/目标长度";
-    this.ui.panelPrimaryValue.textContent = isReady ? "NEON SERPENT" : currentLengthDisplay;
-    this.ui.panelSecondaryLabel.textContent = isReady ? "霓虹吞星" : this.getDeathReasonText();
-    this.ui.panelMetaLabel.hidden = isRevivePrompt;
-    this.ui.panelMetaLabel.textContent = isReady
+    const nextState = this.getOrCreateUiSyncState();
+    const rootPhase = this.phase;
+    const boardTop = `${this.grid.offsetY}px`;
+    const startPanelHidden = !(isReady || isGameOver || isRevivePrompt);
+    const startButtonText = isReady ? "开始游戏" : isGameOver ? "重开" : "复活";
+    const startButtonAriaLabel = isReady ? "开始游戏" : isGameOver ? "重新开始" : "确认复活";
+    const startButtonDisabled = isReviving;
+    const pauseButtonDisabled = this.phase !== "playing" && this.phase !== "paused";
+    const pauseButtonText = this.phase === "paused" ? "▶" : "❚❚";
+    const pauseButtonAriaLabel = this.phase === "paused" ? "继续游戏" : "暂停游戏";
+    const panelPrimaryLabel = isReady ? "准备开始" : "当前/目标长度";
+    const panelPrimaryValue = isReady ? "NEON SERPENT" : currentLengthDisplay;
+    const panelSecondaryLabel = isReady ? "霓虹吞星" : this.getDeathReasonText();
+    const panelMetaHidden = isRevivePrompt;
+    const panelMetaLabel = isReady
       ? "长按方向键加速·长按Shift减速"
       : isGameOver
         ? "按开始重开"
         : isReviving
           ? `${this.getReviveCountdownSeconds()} 秒后开始`
           : "";
-    this.ui.lifeHearts.forEach((heart, index) => {
-      heart.dataset.active = index < this.livesRemaining ? "true" : "false";
-    });
-    this.ui.lengthLabel.textContent = currentLengthDisplay;
-    this.ui.unlockTitleLabel.textContent = unlockCopy.title;
-    this.ui.unlockValueLabel.textContent = unlockCopy.value;
-    this.ui.stateLabel.textContent = PHASE_LABELS[this.phase];
-    this.ui.fpsLabel.textContent = `${this.lastFps || "--"} FPS`;
-    this.ui.sizeLabel.textContent = `${size.width} x ${size.height} @${size.dpr.toFixed(1)}`;
+    const lengthLabel = currentLengthDisplay;
+    const unlockTitleLabel = unlockCopy.title;
+    const unlockValueLabel = unlockCopy.value;
+    const stateLabel = PHASE_LABELS[this.phase];
+    const fpsLabel = `${this.lastFps || "--"} FPS`;
+    const sizeLabel = `${size.width} x ${size.height} @${size.dpr.toFixed(1)}`;
+
+    if (!hasUiCache || nextState.rootPhase !== rootPhase) {
+      this.ui.root.dataset.phase = rootPhase;
+      nextState.rootPhase = rootPhase;
+    }
+
+    if (!hasUiCache || nextState.boardTop !== boardTop) {
+      this.ui.root.style.setProperty("--board-top", boardTop);
+      nextState.boardTop = boardTop;
+    }
+
+    if (!hasUiCache || nextState.startPanelHidden !== startPanelHidden) {
+      this.ui.startPanel.hidden = startPanelHidden;
+      nextState.startPanelHidden = startPanelHidden;
+    }
+
+    if (!hasUiCache || nextState.startButtonText !== startButtonText) {
+      this.ui.startButton.textContent = startButtonText;
+      nextState.startButtonText = startButtonText;
+    }
+
+    if (!hasUiCache || nextState.startButtonAriaLabel !== startButtonAriaLabel) {
+      this.ui.startButton.setAttribute("aria-label", startButtonAriaLabel);
+      nextState.startButtonAriaLabel = startButtonAriaLabel;
+    }
+
+    if (!hasUiCache || nextState.startButtonDisabled !== startButtonDisabled) {
+      this.ui.startButton.disabled = startButtonDisabled;
+      nextState.startButtonDisabled = startButtonDisabled;
+    }
+
+    if (!hasUiCache || nextState.pauseButtonDisabled !== pauseButtonDisabled) {
+      this.ui.pauseButton.disabled = pauseButtonDisabled;
+      nextState.pauseButtonDisabled = pauseButtonDisabled;
+    }
+
+    if (!hasUiCache || nextState.pauseButtonText !== pauseButtonText) {
+      this.ui.pauseButton.textContent = pauseButtonText;
+      nextState.pauseButtonText = pauseButtonText;
+    }
+
+    if (!hasUiCache || nextState.pauseButtonAriaLabel !== pauseButtonAriaLabel) {
+      this.ui.pauseButton.setAttribute("aria-label", pauseButtonAriaLabel);
+      nextState.pauseButtonAriaLabel = pauseButtonAriaLabel;
+    }
+
+    if (!hasUiCache || nextState.panelPrimaryLabel !== panelPrimaryLabel) {
+      this.ui.panelPrimaryLabel.textContent = panelPrimaryLabel;
+      nextState.panelPrimaryLabel = panelPrimaryLabel;
+    }
+
+    if (!hasUiCache || nextState.panelPrimaryValue !== panelPrimaryValue) {
+      this.ui.panelPrimaryValue.textContent = panelPrimaryValue;
+      nextState.panelPrimaryValue = panelPrimaryValue;
+    }
+
+    if (!hasUiCache || nextState.panelSecondaryLabel !== panelSecondaryLabel) {
+      this.ui.panelSecondaryLabel.textContent = panelSecondaryLabel;
+      nextState.panelSecondaryLabel = panelSecondaryLabel;
+    }
+
+    if (!hasUiCache || nextState.panelMetaHidden !== panelMetaHidden) {
+      this.ui.panelMetaLabel.hidden = panelMetaHidden;
+      nextState.panelMetaHidden = panelMetaHidden;
+    }
+
+    if (!hasUiCache || nextState.panelMetaLabel !== panelMetaLabel) {
+      this.ui.panelMetaLabel.textContent = panelMetaLabel;
+      nextState.panelMetaLabel = panelMetaLabel;
+    }
+
+    for (let index = 0; index < this.ui.lifeHearts.length; index += 1) {
+      const heart = this.ui.lifeHearts[index];
+      const active = index < this.livesRemaining ? "true" : "false";
+
+      if (!heart) {
+        continue;
+      }
+
+      if (!hasUiCache || nextState.lifeHeartActiveStates[index] !== active) {
+        heart.dataset.active = active;
+        nextState.lifeHeartActiveStates[index] = active;
+      }
+    }
+
+    nextState.lifeHeartActiveStates.length = this.ui.lifeHearts.length;
+
+    if (!hasUiCache || nextState.lengthLabel !== lengthLabel) {
+      this.ui.lengthLabel.textContent = lengthLabel;
+      nextState.lengthLabel = lengthLabel;
+    }
+
+    if (!hasUiCache || nextState.unlockTitleLabel !== unlockTitleLabel) {
+      this.ui.unlockTitleLabel.textContent = unlockTitleLabel;
+      nextState.unlockTitleLabel = unlockTitleLabel;
+    }
+
+    if (!hasUiCache || nextState.unlockValueLabel !== unlockValueLabel) {
+      this.ui.unlockValueLabel.textContent = unlockValueLabel;
+      nextState.unlockValueLabel = unlockValueLabel;
+    }
+
+    if (!hasUiCache || nextState.stateLabel !== stateLabel) {
+      this.ui.stateLabel.textContent = stateLabel;
+      nextState.stateLabel = stateLabel;
+    }
+
+    if (!hasUiCache || nextState.fpsLabel !== fpsLabel) {
+      this.ui.fpsLabel.textContent = fpsLabel;
+      nextState.fpsLabel = fpsLabel;
+    }
+
+    if (!hasUiCache || nextState.sizeLabel !== sizeLabel) {
+      this.ui.sizeLabel.textContent = sizeLabel;
+      nextState.sizeLabel = sizeLabel;
+    }
+  }
+
+  private getOrCreateUiSyncState(): UiSyncState {
+    if (this.uiSyncState) {
+      return this.uiSyncState;
+    }
+
+    this.uiSyncState = {
+      rootPhase: "",
+      boardTop: "",
+      startPanelHidden: false,
+      startButtonText: "",
+      startButtonAriaLabel: "",
+      startButtonDisabled: false,
+      pauseButtonDisabled: false,
+      pauseButtonText: "",
+      pauseButtonAriaLabel: "",
+      panelPrimaryLabel: "",
+      panelPrimaryValue: "",
+      panelSecondaryLabel: "",
+      panelMetaHidden: false,
+      panelMetaLabel: "",
+      lifeHeartActiveStates: [],
+      lengthLabel: "",
+      unlockTitleLabel: "",
+      unlockValueLabel: "",
+      stateLabel: "",
+      fpsLabel: "",
+      sizeLabel: "",
+      tickerCurrentText: "",
+      tickerNextText: "",
+      tickerCurrentOpacity: "",
+      tickerNextOpacity: "",
+    };
+
+    return this.uiSyncState;
   }
 }

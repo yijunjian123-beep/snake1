@@ -163,6 +163,9 @@ let activeRenderQuality: RenderQualityState = QUALITY_LEVELS[DEFAULT_QUALITY_LEV
 const STAR_COUNT = 132;
 const MAX_DPR = 3;
 const TRAIL_LIFE_SECONDS = 0.34;
+let reducedMotionQuery: MediaQueryList | null = null;
+let isReducedMotionPreferred = false;
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -443,8 +446,108 @@ function cellsMatch(left: GridCell, right: GridCell): boolean {
   return left.column === right.column && left.row === right.row;
 }
 
+function handleReducedMotionChange(event: MediaQueryListEvent): void {
+  isReducedMotionPreferred = event.matches;
+}
+
+function ensureReducedMotionPreference(): void {
+  if (typeof window === "undefined" || reducedMotionQuery) {
+    return;
+  }
+
+  reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  isReducedMotionPreferred = reducedMotionQuery.matches;
+  reducedMotionQuery.addEventListener("change", handleReducedMotionChange);
+}
+
 function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  ensureReducedMotionPreference();
+  return isReducedMotionPreferred;
+}
+
+function releaseReducedMotionPreference(): void {
+  if (!reducedMotionQuery) {
+    return;
+  }
+
+  reducedMotionQuery.removeEventListener("change", handleReducedMotionChange);
+  reducedMotionQuery = null;
+  isReducedMotionPreferred = false;
+}
+
+function compactArrayInPlace<T>(items: T[], isAlive: (item: T) => boolean): void {
+  let writeIndex = 0;
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+
+    if (!item || !isAlive(item)) {
+      continue;
+    }
+
+    items[writeIndex] = item;
+    writeIndex += 1;
+  }
+
+  items.length = writeIndex;
+}
+
+function syncGridCellArray(target: GridCell[], source: readonly GridCell[]): void {
+  const sourceLength = source.length;
+
+  for (let index = 0; index < sourceLength; index += 1) {
+    const sourceCell = source[index];
+
+    if (!sourceCell) {
+      continue;
+    }
+
+    const targetCell = target[index];
+
+    if (targetCell) {
+      targetCell.column = sourceCell.column;
+      targetCell.row = sourceCell.row;
+    } else {
+      target.push({
+        column: sourceCell.column,
+        row: sourceCell.row,
+      });
+    }
+  }
+
+  target.length = sourceLength;
+}
+
+function haveGridCellsChanged(previous: readonly GridCell[], next: readonly GridCell[]): boolean {
+  if (previous.length !== next.length) {
+    return true;
+  }
+
+  for (let index = 0; index < next.length; index += 1) {
+    const previousCell = previous[index];
+    const nextCell = next[index];
+
+    if (!previousCell || !nextCell || !cellsMatch(previousCell, nextCell)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function createTrailCells(snake: readonly GridCell[]): GridCell[] {
+  const cells = new Array<GridCell>(snake.length);
+
+  for (let index = 0; index < snake.length; index += 1) {
+    const segment = snake[index];
+
+    cells[index] = {
+      column: segment?.column ?? 0,
+      row: segment?.row ?? 0,
+    };
+  }
+
+  return cells;
 }
 
 function triggerShake(
@@ -671,6 +774,8 @@ function rewardShakeDirection(grid: GridMetrics, point: { x: number; y: number }
 
 function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: number): void {
   const dt = Math.min(delta / 1000, 0.05);
+  const dragExponent = delta / 16.67;
+  const reducedMotion = prefersReducedMotion();
   const head = snapshot.snake[0] ?? null;
   const headKey = cellKey(head);
   const scoreIncreased = state.previousScore !== null && snapshot.score > state.previousScore;
@@ -701,23 +806,23 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
     particle.life -= dt;
     particle.x += particle.vx * dt;
     particle.y += particle.vy * dt;
-    particle.vx *= Math.pow(particle.drag, delta / 16.67);
-    particle.vy *= Math.pow(particle.drag, delta / 16.67);
+    particle.vx *= Math.pow(particle.drag, dragExponent);
+    particle.vy *= Math.pow(particle.drag, dragExponent);
   }
 
-  state.particles = state.particles.filter((particle) => particle.life > 0);
+  compactArrayInPlace(state.particles, (particle) => particle.life > 0);
 
   for (const rewardBurst of state.rewardBursts) {
     rewardBurst.life -= dt;
   }
 
-  state.rewardBursts = state.rewardBursts.filter((rewardBurst) => rewardBurst.life > 0);
+  compactArrayInPlace(state.rewardBursts, (rewardBurst) => rewardBurst.life > 0);
 
   for (const sample of state.trails) {
     sample.life -= dt;
   }
 
-  state.trails = state.trails.filter((sample) => sample.life > 0);
+  compactArrayInPlace(state.trails, (sample) => sample.life > 0);
   state.shake.time = Math.max(0, state.shake.time - dt);
   state.blackHoleAlertAlpha = approach(state.blackHoleAlertAlpha, alertVisible ? 1 : 0, 6, dt);
 
@@ -737,7 +842,7 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
       spawnRewardBurst(state, center.x, center.y, snapshot.grid.cellSize);
       spawnBurst(state, center.x, center.y, particleCount, 72, particlePower);
 
-      if (!prefersReducedMotion()) {
+      if (!reducedMotion) {
         triggerShake(state, 2.05, 0.12, "reward", shakeDirection.x, shakeDirection.y);
       }
     }
@@ -749,11 +854,11 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
     triggerShake(state, 7.2, 0.28, "impact");
   }
 
-  if (enteredWallGrace && !prefersReducedMotion()) {
+  if (enteredWallGrace && !reducedMotion) {
     triggerShake(state, 1.45, 0.1, "impact");
   }
 
-  if (enteredStarAttractorEffect && !scoreIncreased && !prefersReducedMotion()) {
+  if (enteredStarAttractorEffect && !scoreIncreased && !reducedMotion) {
     const effect = snapshot.starAttractorEffects[starAttractorEffectCount - 1];
 
     if (effect) {
@@ -771,16 +876,23 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
     state.previousSnakeHeadKey !== null &&
     headKey !== state.previousSnakeHeadKey
   ) {
-    state.trails.push({
-      cells: snapshot.snake.map((segment) => ({ column: segment.column, row: segment.row })),
-      life: TRAIL_LIFE_SECONDS,
-      maxLife: TRAIL_LIFE_SECONDS,
-    });
-
     const trailCap = activeRenderQuality.trailCap;
 
-    if (state.trails.length > trailCap) {
-      state.trails.splice(0, state.trails.length - trailCap);
+    if (state.trails.length >= trailCap && trailCap > 0) {
+      const recycledTrail = state.trails.shift();
+
+      if (recycledTrail) {
+        syncGridCellArray(recycledTrail.cells, snapshot.snake);
+        recycledTrail.life = TRAIL_LIFE_SECONDS;
+        recycledTrail.maxLife = TRAIL_LIFE_SECONDS;
+        state.trails.push(recycledTrail);
+      }
+    } else if (trailCap > 0) {
+      state.trails.push({
+        cells: createTrailCells(snapshot.snake),
+        life: TRAIL_LIFE_SECONDS,
+        maxLife: TRAIL_LIFE_SECONDS,
+      });
     }
   }
 
@@ -789,7 +901,10 @@ function updateRenderState(state: RenderState, snapshot: GameSnapshot, delta: nu
   state.previousSnakeHeadKey = headKey;
   state.previousWallGraceKey = wallGraceKey;
   state.previousStarAttractorEffectCount = starAttractorEffectCount;
-  state.previousFoods = snapshot.foods.map((food) => ({ ...food }));
+
+  if (haveGridCellsChanged(state.previousFoods, snapshot.foods)) {
+    syncGridCellArray(state.previousFoods, snapshot.foods);
+  }
 }
 
 function drawBackground(
@@ -2744,6 +2859,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   }
 
   activeRenderQuality = QUALITY_LEVELS[DEFAULT_QUALITY_LEVEL] ?? QUALITY_LEVELS[0]!;
+  ensureReducedMotionPreference();
   let qualityLevel = DEFAULT_QUALITY_LEVEL;
   let size = getCanvasSize(canvas, activeRenderQuality.dprCap);
   let layoutDirty = true;
@@ -2947,10 +3063,12 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       state.particles.length = 0;
       state.rewardBursts.length = 0;
       state.trails.length = 0;
+      state.previousFoods.length = 0;
       backgroundLayer.width = 0;
       backgroundLayer.height = 0;
       boardLayer.width = 0;
       boardLayer.height = 0;
+      releaseReducedMotionPreference();
     },
   };
 }
