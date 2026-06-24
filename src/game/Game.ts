@@ -1,11 +1,11 @@
 ﻿import { createAudioController, type AudioController } from "./audio";
 import {
   getBlackHoleFoodAvoidRadiusCells,
-  isBlackHoleCollision,
   resolveBlackHoleAlert,
   resolveBlackHoleMovement,
   type BlackHoleGravityState,
 } from "./blackHole";
+import { cellCollidesWithPlayerBody, resolveSnakeCollision } from "./collisionSystem";
 import { createInputController } from "./input";
 import { spawnFoodCell } from "./foodSpawn";
 import {
@@ -17,6 +17,7 @@ import {
 import { findReviveSpawnPlacement } from "./spawn";
 import type { ReviveSpawnPlacement } from "./spawn";
 import { rollStarAttractorNeed } from "./starAttractor";
+import { absorbStarAttractorSystem } from "./starAttractorSystem";
 import { OPPOSITE_DIRECTIONS } from "./direction";
 import {
   type ActiveDirectionalInput,
@@ -35,7 +36,14 @@ import {
   type WallGraceState,
 } from "./gameState";
 import { createEntityState, createInputState, createLifecycleState, createMovementState, createProgressState, createSpawnState, createSpeedState, createTimingState, resetTimingState } from "./stateFactory";
-import { cellsMatch } from "./gridMath";
+import {
+  DEFAULT_REVIVE_COUNTDOWN_MS,
+  canConfirmRevive,
+  enterGameOverState,
+  resolvePlayerDeathTransition,
+  resolveReviveCountdown,
+  startReviveCountdown,
+} from "./reviveSystem";
 import { createRenderer } from "./render";
 import { readHighScore, writeHighScore } from "./storage";
 import { buildFoodSpawnContext, getReviveBlockedCells as buildReviveBlockedCells, isCurrentPlacementValid } from "./spawnRuntime";
@@ -61,6 +69,7 @@ import {
 import { runTransientSimulation, type TransientSimulationContext } from "./simulationPipeline";
 import {
   canAdvanceDirection,
+  commitSnakeMovement,
   evaluateSnakeAdvance,
   pickAdvanceDirection,
   type SnakeMovementEvaluationContext,
@@ -112,7 +121,6 @@ const MAX_DIRECTION_QUEUE_LENGTH = 2;
 const STARTING_LENGTH = 4;
 const SCORE_PER_CORE = 10;
 const WALL_GRACE_MS = 110;
-const REVIVE_COUNTDOWN_MS = 3000;
 const MIN_COLUMNS = 12;
 const MAX_COLUMNS = 34;
 const MIN_ROWS = 10;
@@ -528,14 +536,6 @@ export class Game {
 
   private set activeInputSequence(value: number) {
     this.inputState.activeInputSequence = value;
-  }
-
-  private get nextStarAttractorEffectId(): number {
-    return this.spawn.nextStarAttractorEffectId;
-  }
-
-  private set nextStarAttractorEffectId(value: number) {
-    this.spawn.nextStarAttractorEffectId = value;
   }
 
   public constructor(options: GameOptions) {
@@ -980,32 +980,20 @@ export class Game {
   }
 
   private handlePlayerDeath(reason: DeathReason): void {
-    if (this.phase === "gameOver") {
-      return;
+    const transition = resolvePlayerDeathTransition(this.lifecycle, reason);
+
+    if (transition === "revivePrompt") {
+      this.resetTransientRunState();
+      this.syncUi(true);
+    } else if (transition === "gameOver") {
+      this.resetTransientRunState();
+      this.saveHighScoreIfNeeded();
+      this.syncUi(true);
     }
-
-    this.deathReason = reason;
-
-    if (this.livesRemaining > 1) {
-      this.livesRemaining -= 1;
-      this.enterRevivePrompt();
-      return;
-    }
-
-    this.livesRemaining = 0;
-    this.finishGameOver(reason);
-  }
-
-  private enterRevivePrompt(): void {
-    this.phase = "revivePrompt";
-    this.reviving = false;
-    this.reviveEndsAt = 0;
-    this.resetTransientRunState();
-    this.syncUi(true);
   }
 
   private confirmRevive(): void {
-    if (this.phase !== "revivePrompt" || this.livesRemaining <= 0) {
+    if (!canConfirmRevive(this.lifecycle)) {
       return;
     }
 
@@ -1030,9 +1018,7 @@ export class Game {
     }
 
     this.applyRevivePlacement(placement);
-    this.phase = "reviving";
-    this.reviving = true;
-    this.reviveEndsAt = this.elapsed + REVIVE_COUNTDOWN_MS;
+    startReviveCountdown(this.lifecycle, this.elapsed, DEFAULT_REVIVE_COUNTDOWN_MS);
     this.syncUi(true);
   }
 
@@ -1060,34 +1046,14 @@ export class Game {
   }
 
   private updateReviveState(): void {
-    if (!this.reviving || this.phase !== "reviving") {
-      return;
+    if (resolveReviveCountdown(this.lifecycle, this.elapsed) === "completed") {
+      this.syncUi(true);
     }
-
-    if (this.elapsed < this.reviveEndsAt) {
-      return;
-    }
-
-    this.completeRevive();
-  }
-
-  private completeRevive(): void {
-    if (!this.reviving || this.phase !== "reviving") {
-      return;
-    }
-
-    this.reviving = false;
-    this.reviveEndsAt = 0;
-    this.phase = "playing";
-    this.syncUi(true);
   }
 
   private finishGameOver(reason: DeathReason | null = null): void {
-    this.phase = "gameOver";
-    this.reviving = false;
-    this.reviveEndsAt = 0;
+    enterGameOverState(this.lifecycle, reason);
     this.resetTransientRunState();
-    this.deathReason = reason;
     this.saveHighScoreIfNeeded();
     this.syncUi(true);
   }
@@ -1239,57 +1205,46 @@ export class Game {
       return;
     }
 
-    const {
-      nextHead,
-      ateFoodIndex,
-      ateStarCoreIndex,
-      ateStarAttractorIndex,
-      growthBeforeMove,
-      shouldKeepTail,
-    } = evaluation;
+    const collision = resolveSnakeCollision(
+      {
+        blackHoles: this.blackHoles,
+        starBeasts: this.starBeasts,
+        currentTime,
+      },
+      evaluation,
+      this.direction,
+    );
 
-    if (evaluation.isOutOfBounds) {
-      this.startWallGrace(this.direction);
+    if (collision.kind === "wall") {
+      this.startWallGrace(collision.direction);
       return;
     }
 
-    if (evaluation.collidesWithSelf) {
-      this.handlePlayerDeath("snake_body");
+    if (collision.kind === "death") {
+      this.handlePlayerDeath(collision.reason);
       return;
     }
 
-    if (this.collidesWithBlackHole(nextHead)) {
-      this.handlePlayerDeath("black_hole");
-      return;
-    }
+    const moveResult = commitSnakeMovement(
+      {
+        grid: this.grid,
+        snake: this.snake,
+        snakeOccupancy: this.snakeOccupancy,
+        pendingGrowthSegments: this.pendingGrowthSegments,
+      },
+      evaluation,
+    );
+    this.pendingGrowthSegments = moveResult.pendingGrowthSegments;
 
-    if (this.collidesWithStarBeast(nextHead)) {
-      this.handlePlayerDeath("star_beast");
-      return;
-    }
-
-    const previousTail = this.snake[this.snake.length - 1] ?? null;
-    this.snake = [nextHead, ...this.snake];
-    this.adjustSnakeOccupancy(nextHead, 1);
-
-    if (!shouldKeepTail && previousTail) {
-      this.snake.pop();
-      this.adjustSnakeOccupancy(previousTail, -1);
-    }
-
-    if (ateFoodIndex !== -1) {
-      this.foods.splice(ateFoodIndex, 1);
-      this.handleCoreCollection(currentTime, 1, true, nextHead);
-    } else if (ateStarCoreIndex !== -1) {
-      this.starCores.splice(ateStarCoreIndex, 1);
-      this.handleCoreCollection(currentTime, 1, false, nextHead);
-    } else if (ateStarAttractorIndex !== -1) {
-      this.starAttractors.splice(ateStarAttractorIndex, 1);
-      this.absorbStarAttractor(nextHead, currentTime);
-    }
-
-    if (growthBeforeMove > 0) {
-      this.pendingGrowthSegments = Math.max(0, this.pendingGrowthSegments - 1);
+    if (moveResult.pickup?.kind === "food") {
+      this.foods.splice(moveResult.pickup.index, 1);
+      this.handleCoreCollection(currentTime, 1, true, moveResult.nextHead);
+    } else if (moveResult.pickup?.kind === "starCore") {
+      this.starCores.splice(moveResult.pickup.index, 1);
+      this.handleCoreCollection(currentTime, 1, false, moveResult.nextHead);
+    } else if (moveResult.pickup?.kind === "starAttractor") {
+      this.starAttractors.splice(moveResult.pickup.index, 1);
+      this.absorbStarAttractor(moveResult.nextHead, currentTime);
     }
 
     if (STAR_ATTRACTOR_ENABLED) {
@@ -1359,18 +1314,24 @@ export class Game {
   }
 
   private absorbStarAttractor(attractorCell: GridCell, currentTime: number): void {
-    if (!STAR_ATTRACTOR_ENABLED) {
+    const result = absorbStarAttractorSystem({
+      enabled: STAR_ATTRACTOR_ENABLED,
+      attractorCell,
+      currentTime,
+      foods: this.foods,
+      snakeHead: this.snake[0] ?? null,
+      birthCell: this.birthCell,
+      starAttractorEffects: this.starAttractorEffects,
+      spawnState: this.spawn,
+    });
+
+    if (!result) {
       return;
     }
 
-    const absorbedCells = this.foods.map((food) => ({ ...food }));
-    const absorbCount = absorbedCells.length;
-
-    this.foods = [];
-
-    if (absorbCount > 0) {
-      this.pendingGrowthSegments += absorbCount;
-      this.handleCoreCollection(currentTime, absorbCount, false, attractorCell);
+    if (result.absorbCount > 0) {
+      this.pendingGrowthSegments += result.pendingGrowthDelta;
+      this.handleCoreCollection(currentTime, result.absorbCount, false, attractorCell);
     } else {
       this.saveHighScoreIfNeeded();
       this.refreshBlackHoles();
@@ -1379,17 +1340,7 @@ export class Game {
       this.syncUi(true);
     }
 
-    this.audio.playRewardPulse(absorbCount);
-    this.starAttractorEffects.push({
-      id: this.nextStarAttractorEffectId++,
-      origin: { ...attractorCell },
-      target: this.snake[0] ? { ...this.snake[0] } : { ...this.birthCell },
-      absorbedCells,
-      absorbCount,
-      createdAt: currentTime,
-      lifetimeMs: absorbCount >= 12 ? 860 : absorbCount >= 8 ? 740 : 620,
-      seed: this.nextStarAttractorEffectId * 113 + absorbCount * 17,
-    });
+    this.audio.playRewardPulse(result.absorbCount);
   }
 
   private refreshBlackHoles(): void {
@@ -1576,29 +1527,11 @@ export class Game {
   }
 
   private collidesWithPlayerBody(cell: GridCell): boolean {
-    const head = this.snake[0];
-
-    if (!head) {
-      return false;
-    }
-
-    const index = this.getSnakeCellIndex(cell);
-
-    if (index === null) {
-      return false;
-    }
-
-    const occupancy = this.snakeOccupancy[index] ?? 0;
-
-    return occupancy > 0 && !cellsMatch(head, cell);
-  }
-
-  private collidesWithStarBeast(cell: GridCell): boolean {
-    return this.starBeasts.some((beast) => beast.alive && beast.body.some((segment) => cellsMatch(segment, cell)));
-  }
-
-  private collidesWithBlackHole(cell: GridCell): boolean {
-    return this.blackHoles.some((blackHole) => isBlackHoleCollision(cell, blackHole, this.elapsed / 1000));
+    return cellCollidesWithPlayerBody({
+      grid: this.grid,
+      snake: this.snake,
+      snakeOccupancy: this.snakeOccupancy,
+    }, cell);
   }
 
   private startWallGrace(direction: Direction): void {

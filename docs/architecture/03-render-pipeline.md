@@ -4,9 +4,9 @@
 
 当前 `render.ts` 同时承担：
 
-- 背景与静态层缓存
-- 多数低层实体绘制函数
-- 背景、棋盘、实体、特效的具体 Canvas 画法
+- renderer 创建和 pass drawer 组装
+- 墙边缘预警绘制
+- 背景、棋盘、实体、特效的少量入口协调
 
 已经拆出：
 
@@ -20,6 +20,8 @@
 - `renderBoard.ts`：霓虹远景网格、核心背景光、棋盘边框/格线和静态棋盘快照
 - `renderCores.ts`：食物星核、掉落星核、星核爆散入场状态和共享星形 glyph 指标
 - `renderBlackHole.ts`：黑洞本体与黑洞 cue 绘制
+- `renderSnake.ts`：蛇身、拖尾、速度提示和头部 cue 绘制
+- `renderFx.ts`：奖励爆散和普通粒子绘制
 - `renderStarBeast.ts`：星兽本体与死亡闪光绘制
 - `renderStarAttractor.ts`：星引仪本体与吸收流光特效绘制
 
@@ -32,8 +34,8 @@
 - `canvasUtils`：已对应 `renderCanvasUtils.ts`
 - `backgroundPass`：已对应 `renderBackground.ts`
 - `boardPass`：已对应 `renderBoard.ts`
-- `entityPass`：食物/星核已进 `renderCores.ts`，黑洞已进 `renderBlackHole.ts`，星兽已进 `renderStarBeast.ts`，星引仪已进 `renderStarAttractor.ts`，蛇仍待继续拆出
-- `fxPass`：星引仪吸收特效已进 `renderStarAttractor.ts`，星兽死亡闪光已进 `renderStarBeast.ts`，奖励爆散、粒子、拖尾仍待继续拆出
+- `entityPass`：食物/星核已进 `renderCores.ts`，黑洞已进 `renderBlackHole.ts`，星兽已进 `renderStarBeast.ts`，星引仪已进 `renderStarAttractor.ts`，蛇已进 `renderSnake.ts`
+- `fxPass`：星引仪吸收特效已进 `renderStarAttractor.ts`，星兽死亡闪光已进 `renderStarBeast.ts`，蛇拖尾已进 `renderSnake.ts`，奖励爆散和粒子已进 `renderFx.ts`
 - `overlayPass`：已对应 `renderOverlay.ts`
 - `renderPasses`：已承接顺序编排，后续保持只做 pass 调度
 - `renderStaticLayers`：已承接静态层缓存管理，后续低层背景/棋盘画法搬家时复用这个入口
@@ -44,3 +46,4 @@
 - 静态层缓存逻辑保留，但职责单独收敛
 - 特效状态更新不要再和具体绘制代码强耦合
 - 具体绘制函数搬家时必须保持 pass 顺序不变，优先以截图/构建/测试确认没有视觉入口破坏
+- `render.ts` 保留墙边缘预警这种单点视觉细节即可，不需要为了几个私有 helper 继续拆文件

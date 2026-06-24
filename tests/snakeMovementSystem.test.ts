@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  commitSnakeMovement,
   evaluateSnakeAdvance,
   pickAdvanceDirection,
+  type SnakeMovementCommitState,
   type SnakeMovementEvaluationContext,
 } from "../src/game/snakeMovementSystem.ts";
 import type { GridCell, GridMetrics, StarAttractor, StarCore } from "../src/game/types.ts";
@@ -44,6 +46,15 @@ function makeContext(overrides: Partial<SnakeMovementEvaluationContext> = {}): S
     pendingGrowthSegments: 0,
     includeStarAttractors: false,
     ...overrides,
+  };
+}
+
+function makeCommitState(snake: GridCell[], pendingGrowthSegments = 0): SnakeMovementCommitState {
+  return {
+    grid,
+    snake: snake.map((cell) => ({ ...cell })),
+    snakeOccupancy: buildOccupancy(snake),
+    pendingGrowthSegments,
   };
 }
 
@@ -110,4 +121,69 @@ test("advance direction picker falls back to a legal recovery direction", () => 
     direction: "up",
     primaryBlocked: true,
   });
+});
+
+test("snake movement commit updates body, occupancy, growth, and pickup result", () => {
+  const snake = [
+    { column: 2, row: 1 },
+    { column: 2, row: 2 },
+    { column: 1, row: 2 },
+    { column: 1, row: 1 },
+  ];
+  const context = makeContext({
+    snake,
+    foods: [{ column: 3, row: 1 }],
+  });
+  const evaluation = evaluateSnakeAdvance(context, "right");
+
+  assert.ok(evaluation);
+
+  const state = makeCommitState(snake);
+  const result = commitSnakeMovement(state, evaluation);
+
+  assert.deepEqual(result, {
+    nextHead: { column: 3, row: 1 },
+    pendingGrowthSegments: 0,
+    pickup: {
+      kind: "food",
+      index: 0,
+    },
+  });
+  assert.deepEqual(state.snake, [
+    { column: 3, row: 1 },
+    { column: 2, row: 1 },
+    { column: 2, row: 2 },
+    { column: 1, row: 2 },
+    { column: 1, row: 1 },
+  ]);
+  assert.equal(state.snakeOccupancy[1 * grid.columns + 3], 1);
+  assert.equal(state.snakeOccupancy[1 * grid.columns + 1], 1);
+});
+
+test("snake movement commit releases the tail unless growth keeps it", () => {
+  const snake = [
+    { column: 2, row: 1 },
+    { column: 2, row: 2 },
+    { column: 1, row: 2 },
+    { column: 1, row: 1 },
+  ];
+  const moveEvaluation = evaluateSnakeAdvance(makeContext({ snake }), "right");
+  const growthEvaluation = evaluateSnakeAdvance(makeContext({ snake, pendingGrowthSegments: 1 }), "right");
+
+  assert.ok(moveEvaluation);
+  assert.ok(growthEvaluation);
+
+  const moveState = makeCommitState(snake);
+  const growthState = makeCommitState(snake, 1);
+
+  commitSnakeMovement(moveState, moveEvaluation);
+  commitSnakeMovement(growthState, growthEvaluation);
+
+  assert.equal(moveState.snake.length, 4);
+  assert.equal(moveState.snakeOccupancy[1 * grid.columns + 1], 0);
+  assert.equal(moveState.pendingGrowthSegments, 0);
+
+  assert.equal(growthState.snake.length, 5);
+  assert.equal(growthState.snakeOccupancy[1 * grid.columns + 1], 1);
+  assert.equal(growthState.pendingGrowthSegments, 0);
 });

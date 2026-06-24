@@ -1,4 +1,4 @@
-import { isBlackHoleCollision } from "./blackHole";
+import { cellCollidesWithBlackHole } from "./collisionSystem";
 import { DIRECTION_DELTAS } from "./direction";
 import type { SpawnRuntimeState } from "./gameState";
 import { cellsMatch } from "./gridMath";
@@ -148,7 +148,7 @@ function advanceStarBeast(
       return;
     }
 
-    if (collidesWithBlackHole(nextHead, input.blackHoles, input.blackHoleCollisionTime)) {
+    if (cellCollidesWithBlackHole(nextHead, input.blackHoles, input.blackHoleCollisionTime)) {
       killStarBeast(input, beast, "black_hole");
       return;
     }
@@ -337,10 +337,6 @@ function getStarBeastState(playerHead: GridCell, beast: StarBeast): StarBeast["s
   }
 
   return beast.state === "chase" ? "chase" : "patrol";
-}
-
-function collidesWithBlackHole(cell: GridCell, blackHoles: readonly BlackHole[], currentTime: number): boolean {
-  return blackHoles.some((blackHole) => isBlackHoleCollision(cell, blackHole, currentTime));
 }
 
 function rollDuration(min: number, max: number, random: () => number): number {

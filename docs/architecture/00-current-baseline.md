@@ -10,10 +10,12 @@
   - 负责查询 DOM、组装 `GameUiElements`、启动 `Game`
 - `src/game/Game.ts`
   - 当前运行时总控
-  - 同时负责生命周期、输入处理、移动推进、碰撞、生成、复活、UI 同步
+  - 负责生命周期入口、输入处理、移动提交、拾取/死亡编排、复活出生点编排、UI 同步
+  - 碰撞、生成、瞬态更新、UI 派生等高耦合逻辑已逐步委托给独立模块
 - `src/game/render.ts`
   - 当前渲染总控
-  - 同时负责背景、棋盘、实体绘制、粒子、拖尾、覆盖层、画质降级
+  - 负责 renderer 创建、pass drawer 组装、墙边缘预警和少量入口协调
+  - 背景、棋盘、星核、黑洞、星兽、星引仪、蛇身/拖尾、奖励爆散、粒子等具体绘制已逐步拆出
 - `src/game/input.ts`
   - 键盘与触控输入适配
 - `src/game/audio.ts`
@@ -40,10 +42,16 @@
   - 星兽出生 grace、移动、AI 决策、吃星核、死亡掉核、重生锁定等模拟 system
 - `src/game/snakeMovementSystem.ts`
   - 蛇下一格预判、尾巴让位、自撞判定、候选方向选择等移动前置纯逻辑
+- `src/game/collisionSystem.ts`
+  - 蛇本步碰撞结算，以及玩家身体、星兽、黑洞 cell 碰撞共享判断
+- `src/game/reviveSystem.ts`
+  - 死亡、复活提示、复活倒计时完成、game over 等生命周期状态转移
 - `src/game/starBeast.ts`
   - 星兽生成、AI 倾向、掉核
 - `src/game/starAttractor.ts`
   - 星引仪相关配置与生成逻辑
+- `src/game/starAttractorSystem.ts`
+  - 星引仪吸收结算、吸收特效创建与生命周期数值；当前通过功能开关保持停用基线
 - `src/game/progression.ts`
   - 解锁条件、安全出生默认配置、长度提示文案
 - `src/game/viewModel.ts`
@@ -68,6 +76,10 @@
   - 食物星核、掉落星核、星核爆散入场状态和共享星形 glyph 指标
 - `src/game/renderBlackHole.ts`
   - 黑洞本体绘制与黑洞 cue 绘制
+- `src/game/renderSnake.ts`
+  - 蛇身、拖尾、速度提示、头部 cue 绘制
+- `src/game/renderFx.ts`
+  - 奖励爆散和普通粒子绘制
 - `src/game/renderStarBeast.ts`
   - 星兽本体绘制与星兽死亡闪光绘制
 - `src/game/renderStarAttractor.ts`
@@ -75,8 +87,8 @@
 
 ## 当前已确认的实现形态
 
-- `Game.ts` 仍然是主要运行时入口，但已从约 2300 行继续瘦身到约 1700 行
-- `render.ts` 仍然是主要低层绘制入口，但 pass 编排、渲染状态、画质、覆盖层、背景层、棋盘层已经开始拆出，黑洞与星兽实体绘制也已继续下沉
+- `Game.ts` 仍然是主要运行时入口，但已从约 2300 行继续瘦身到约 1440 行
+- `render.ts` 仍然是 renderer 入口，但已瘦身到约 330 行，当前主要保留 pass 组装、墙边缘预警和入口协调
 - 黑洞、星兽、出生算法已有独立模块；生成编排已开始集中到 `spawnSystems.ts` 和 `spawnRuntime.ts`
 - `Game.ts` 的运行时状态已开始收束成几个域对象：
   - `lifecycle`
@@ -94,18 +106,23 @@
 - `src/game/transientSystems.ts` 已承接食物波、星核运动/拾取、星兽特效回收，`Game.ts` 通过薄调用接入
 - `src/game/simulationPipeline.ts` 已开始承接第 9-10 步之间的瞬态更新顺序
 - `src/game/starBeastSimulation.ts` 已承接星兽移动、吃核、死亡掉核和重生锁定，`Game.ts` 只负责传入 runtime 状态和死亡回调
-- `src/game/snakeMovementSystem.ts` 已承接蛇移动前的纯评估逻辑，`Game.ts` 仍保留实际提交移动、拾取、死亡和 UI 同步
+- `src/game/snakeMovementSystem.ts` 已承接蛇移动评估、尾巴让位、实际提交移动、占用表更新、成长扣减和拾取结果返回；`Game.ts` 仍编排拾取后的计分、补货、UI/音效副作用
+- `src/game/collisionSystem.ts` 已承接蛇本步碰撞结算，星兽模拟也复用这里的黑洞碰撞 helper，避免规则漂移
+- `src/game/reviveSystem.ts` 已承接复活/死亡状态机，`Game.ts` 只负责音效、复活出生点选择、应用出生布局和 UI 同步
+- `src/game/starAttractorSystem.ts` 已承接星引仪吸收结算和特效创建；因功能开关关闭，正常流程仍不会执行吸附
 - `src/game/renderPasses.ts` 已承接单帧绘制顺序，`src/game/renderStaticLayers.ts` 已承接静态层缓存管理，`render.ts` 暂时仍保留具体绘制函数
 - `src/game/renderCanvasUtils.ts` 已承接无状态 Canvas 工具，后续 background/entity/fx 分层会复用这些基础函数
 - `src/game/renderBackground.ts` 已承接背景层绘制，`render.ts` 通过静态层和 pass drawer 调用它
 - `src/game/renderBoard.ts` 已承接棋盘层绘制和静态棋盘快照，`render.ts` 不再直接维护棋盘底层画法
 - `src/game/renderCores.ts` 已承接食物/星核绘制和共享星核视觉纯函数，`render.ts` 保留兼容导出
 - `src/game/renderBlackHole.ts` 已承接黑洞本体和黑洞 cue 绘制
+- `src/game/renderSnake.ts` 已承接蛇身、拖尾、速度提示与头部 cue 绘制
+- `src/game/renderFx.ts` 已承接奖励爆散与普通粒子绘制
 - `src/game/renderStarBeast.ts` 已承接星兽本体和死亡闪光绘制
 - `src/game/renderStarAttractor.ts` 已承接星引仪本体和吸收特效，是 entity/fx 分层的第一块
 - 网格数学、方向、距离、cell key、危险区判断等基础能力在多个文件重复存在
 - UI 文案与按钮状态拼装已开始迁移到 `viewModel.ts`
-- 渲染状态更新已拆到 `renderState.ts`；具体实体绘制仍有少量留在 `render.ts`，但黑洞与星兽已不再绑定在主入口里
+- 渲染状态更新已拆到 `renderState.ts`；具体实体/FX 绘制基本已从 `render.ts` 下沉，`render.ts` 主要作为 renderer 与 pass drawer 的装配入口
 
 ## 当前必须保持不变的行为基线
 
@@ -129,7 +146,8 @@
   - 星引仪解锁与停用基线
 - `tests/starBeast.test.ts`
   - 星兽解锁、AI、掉核、共享视觉规则
-- 还需要补充针对 `viewModel.ts` 的纯逻辑回归测试
+- `tests/viewModel.test.ts`
+  - 快照、复活提示 HUD、UI 缓存写入与 ticker 派生
 - `tests/foodSpawn.test.ts`
   - 食物生成上下文、wave bag、候选筛选与聚类逻辑
 - `tests/spawnSelectors.test.ts`
@@ -139,12 +157,18 @@
 - `tests/transientSystems.test.ts`
   - 食物波 system、星核 system、星兽特效回收
 - `tests/snakeMovementSystem.test.ts`
-  - 蛇移动预判、尾巴让位、成长阻挡、拾取索引、方向 fallback
+  - 蛇移动预判、尾巴让位、成长阻挡、拾取索引、方向 fallback、移动提交和占用表更新
+- `tests/collisionSystem.test.ts`
+  - 蛇本步碰撞结算、星兽碰撞、玩家身体碰撞 helper
+- `tests/reviveSystem.test.ts`
+  - 死亡扣命、复活提示、复活倒计时、game over 状态转移
+- `tests/starAttractorSystem.test.ts`
+  - 星引仪吸收结算、停用开关、吸收特效生命周期
 
 ## 当前问题清单
 
 - `package.json` 当前 `test` 入口覆盖 `tests/*.test.ts`，但 Windows PATH 中可能缺少 `node`
 - 运行脚本依赖系统 PATH 中存在 `node`
 - 测试仍大量通过内部状态直接操纵 `Game` 私有实现，`viewModel.ts` 是改善这一点的第一步
-- 蛇移动提交、碰撞结算和复活状态机仍集中在 `Game.ts`
-- render 低层实体与特效绘制仍有部分集中在 `render.ts`，后续应继续拆成蛇身、拖尾、粒子与奖励爆散模块
+- 拾取后的计分、补货、UI/音效副作用仍由 `Game.ts` 编排
+- `render.ts` 已不再承接主要实体/FX 画法，后续不建议继续拆墙边缘预警这类单点视觉细节

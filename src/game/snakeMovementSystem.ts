@@ -19,6 +19,24 @@ export interface SnakeAdvanceDirectionSelection {
   primaryBlocked: boolean;
 }
 
+export type SnakePickupKind = "food" | "starCore" | "starAttractor";
+
+export interface SnakeMovementCommitState {
+  grid: GridMetrics;
+  snake: GridCell[];
+  snakeOccupancy: Uint8Array;
+  pendingGrowthSegments: number;
+}
+
+export interface SnakeMovementCommitResult {
+  nextHead: GridCell;
+  pendingGrowthSegments: number;
+  pickup: {
+    kind: SnakePickupKind;
+    index: number;
+  } | null;
+}
+
 export function evaluateSnakeAdvance(
   context: SnakeMovementEvaluationContext,
   direction: Direction,
@@ -54,6 +72,31 @@ export function evaluateSnakeAdvance(
     isOutOfBounds,
     collidesWithSelf,
     canAdvance: !isOutOfBounds && !collidesWithSelf,
+  };
+}
+
+export function commitSnakeMovement(
+  state: SnakeMovementCommitState,
+  evaluation: SnakeAdvanceEvaluation,
+): SnakeMovementCommitResult {
+  const previousTail = state.snake[state.snake.length - 1] ?? null;
+
+  state.snake.unshift(evaluation.nextHead);
+  adjustSnakeOccupancy(state, evaluation.nextHead, 1);
+
+  if (!evaluation.shouldKeepTail && previousTail) {
+    state.snake.pop();
+    adjustSnakeOccupancy(state, previousTail, -1);
+  }
+
+  if (evaluation.growthBeforeMove > 0) {
+    state.pendingGrowthSegments = Math.max(0, state.pendingGrowthSegments - 1);
+  }
+
+  return {
+    nextHead: evaluation.nextHead,
+    pendingGrowthSegments: state.pendingGrowthSegments,
+    pickup: resolveSnakePickup(evaluation),
   };
 }
 
@@ -95,6 +138,40 @@ function findStarCoreIndex(starCores: readonly StarCore[], cell: GridCell): numb
 
     return cellsMatch(coreCell, cell) || distance <= 0.42;
   });
+}
+
+function resolveSnakePickup(
+  evaluation: SnakeAdvanceEvaluation,
+): SnakeMovementCommitResult["pickup"] {
+  if (evaluation.ateFoodIndex !== -1) {
+    return {
+      kind: "food",
+      index: evaluation.ateFoodIndex,
+    };
+  }
+
+  if (evaluation.ateStarCoreIndex !== -1) {
+    return {
+      kind: "starCore",
+      index: evaluation.ateStarCoreIndex,
+    };
+  }
+
+  if (evaluation.ateStarAttractorIndex !== -1) {
+    return {
+      kind: "starAttractor",
+      index: evaluation.ateStarAttractorIndex,
+    };
+  }
+
+  return null;
+}
+
+function adjustSnakeOccupancy(state: SnakeMovementCommitState, cell: GridCell, delta: number): void {
+  const index = cell.row * state.grid.columns + cell.column;
+  const nextValue = (state.snakeOccupancy[index] ?? 0) + delta;
+
+  state.snakeOccupancy[index] = Math.max(0, nextValue);
 }
 
 function collidesWithSnakeBody(

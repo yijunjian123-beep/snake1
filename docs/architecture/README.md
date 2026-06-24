@@ -17,6 +17,11 @@
 - `04-performance-budget.md`：性能预算与优化守则
 - `05-test-strategy.md`：回归测试、验收口径和文档同步要求
 
-当前已经落地的第一层拆分：
+当前已经落地的关键拆分：
 
 - `src/game/viewModel.ts`：快照、ticker、UI 派生与缓存应用的 selector 层
+- `src/game/collisionSystem.ts`：蛇本步碰撞结算与共享 cell 碰撞 helper
+- `src/game/reviveSystem.ts`：死亡、复活提示、倒计时完成和 game over 状态转移
+- `src/game/starAttractorSystem.ts`：星引仪吸收结算与吸收特效创建；当前功能开关保持关闭
+- `src/game/renderSnake.ts`：蛇身、拖尾、速度提示和头部 cue 绘制
+- `src/game/renderFx.ts`：奖励爆散和普通粒子绘制
