@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   cellCollidesWithPlayerBody,
+  resolveMultiplayerSnakeCollisions,
   resolveSnakeCollision,
+  type MultiplayerSnakeEvaluation,
   type PlayerBodyCollisionContext,
   type SnakeCollisionContext,
 } from "../src/game/collisionSystem.ts";
@@ -111,4 +113,157 @@ test("player body collision ignores the current head but catches occupied body c
   assert.equal(cellCollidesWithPlayerBody(context, { column: 2, row: 2 }), false);
   assert.equal(cellCollidesWithPlayerBody(context, { column: 3, row: 2 }), true);
   assert.equal(cellCollidesWithPlayerBody(context, { column: -1, row: 2 }), false);
+});
+
+test("multiplayer collision resolution detects opponent body collisions", () => {
+  const evaluations: MultiplayerSnakeEvaluation[] = [
+    {
+      playerId: "p1",
+      direction: "right",
+      evaluation: makeEvaluation({
+        nextHead: { column: 4, row: 2 },
+      }),
+      snake: [
+        { column: 3, row: 2 },
+        { column: 2, row: 2 },
+      ],
+      willCommit: true,
+    },
+    {
+      playerId: "p2",
+      direction: "left",
+      evaluation: makeEvaluation({
+        nextHead: { column: 5, row: 3 },
+      }),
+      snake: [
+        { column: 5, row: 3 },
+        { column: 4, row: 2 },
+        { column: 4, row: 3 },
+      ],
+      willCommit: true,
+    },
+  ];
+
+  const results = resolveMultiplayerSnakeCollisions({
+    ...makeCollisionContext(),
+    grid,
+  }, evaluations);
+
+  assert.deepEqual(results[0]?.collision, {
+    kind: "death",
+    reason: "snake_body",
+  });
+  assert.deepEqual(results[1]?.collision, { kind: "none" });
+});
+
+test("multiplayer collision resolution blocks moving into a stationary opponent head", () => {
+  const evaluations: MultiplayerSnakeEvaluation[] = [
+    {
+      playerId: "p1",
+      direction: "right",
+      evaluation: makeEvaluation({
+        nextHead: { column: 4, row: 2 },
+      }),
+      snake: [
+        { column: 3, row: 2 },
+        { column: 2, row: 2 },
+      ],
+      willCommit: true,
+    },
+    {
+      playerId: "p2",
+      direction: "left",
+      evaluation: makeEvaluation({
+        nextHead: { column: 3, row: 2 },
+      }),
+      snake: [
+        { column: 4, row: 2 },
+        { column: 5, row: 2 },
+      ],
+      willCommit: false,
+    },
+  ];
+
+  const results = resolveMultiplayerSnakeCollisions({
+    ...makeCollisionContext(),
+    grid,
+  }, evaluations);
+
+  assert.deepEqual(results[0]?.collision, {
+    kind: "death",
+    reason: "snake_body",
+  });
+  assert.deepEqual(results[1]?.collision, { kind: "none" });
+});
+
+test("multiplayer collision resolution detects head-to-head collisions", () => {
+  const evaluations: MultiplayerSnakeEvaluation[] = [
+    {
+      playerId: "p1",
+      direction: "right",
+      evaluation: makeEvaluation({
+        nextHead: { column: 3, row: 2 },
+      }),
+      snake: [{ column: 2, row: 2 }],
+      willCommit: true,
+    },
+    {
+      playerId: "p2",
+      direction: "left",
+      evaluation: makeEvaluation({
+        nextHead: { column: 3, row: 2 },
+      }),
+      snake: [{ column: 4, row: 2 }],
+      willCommit: true,
+    },
+  ];
+
+  const results = resolveMultiplayerSnakeCollisions({
+    ...makeCollisionContext(),
+    grid,
+  }, evaluations);
+
+  assert.deepEqual(results.map((result) => result.collision), [
+    {
+      kind: "death",
+      reason: "snake_body",
+    },
+    {
+      kind: "death",
+      reason: "snake_body",
+    },
+  ]);
+});
+
+test("multiplayer pickup conflict marks one winner without killing either player", () => {
+  const evaluations: MultiplayerSnakeEvaluation[] = [
+    {
+      playerId: "p1",
+      direction: "right",
+      evaluation: makeEvaluation({
+        nextHead: { column: 3, row: 2 },
+        ateFoodIndex: 0,
+      }),
+      snake: [{ column: 2, row: 2 }],
+      willCommit: true,
+    },
+    {
+      playerId: "p2",
+      direction: "left",
+      evaluation: makeEvaluation({
+        nextHead: { column: 3, row: 3 },
+        ateFoodIndex: 0,
+      }),
+      snake: [{ column: 4, row: 3 }],
+      willCommit: true,
+    },
+  ];
+
+  const results = resolveMultiplayerSnakeCollisions({
+    ...makeCollisionContext(),
+    grid,
+  }, evaluations);
+
+  assert.deepEqual(results.map((result) => result.collision), [{ kind: "none" }, { kind: "none" }]);
+  assert.deepEqual(results.map((result) => result.pickupConflict), [false, true]);
 });

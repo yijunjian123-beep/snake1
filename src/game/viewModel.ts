@@ -11,6 +11,9 @@ import type {
   GameUiElements,
   GridCell,
   GridMetrics,
+  MatchSnapshot,
+  PlayerSnapshot,
+  ShellView,
   SpeedMode,
   StarAttractor,
   StarAttractorEffect,
@@ -74,29 +77,104 @@ export interface GameSnapshotInput {
   elapsed: number;
   wallGrace: WallGraceState | null;
   includeStarAttractor: boolean;
+  match: MatchSnapshot;
+  players?: readonly PlayerSnapshotInput[];
+}
+
+export interface PlayerSnapshotInput {
+  id: PlayerSnapshot["id"];
+  label: string;
+  inputOrigin: PlayerSnapshot["inputOrigin"];
+  snake: readonly GridCell[];
+  direction: Direction;
+  score: number;
+  highScore: number;
+  livesRemaining: number;
+  deathReason: DeathReason | null;
+  speedMode: SpeedMode;
+  speedMultiplier: number;
+  speedCue: SpeedCueState | null;
+  reviving: boolean;
+  reviveEndsAt: number;
+  elapsed: number;
+  wallGrace: WallGraceState | null;
 }
 
 export interface UiSyncInput {
   phase: GamePhase;
+  shellView?: ShellView;
   grid: GridMetrics;
   progress: GameProgress;
   livesRemaining: number;
   lastFps: number;
+  lastSimulationMs: number;
+  lastRenderMs: number;
   size: CanvasSize;
   deathReason: DeathReason | null;
   reviving: boolean;
   reviveEndsAt: number;
   elapsed: number;
   lifeHeartCount: number;
+  match: MatchSnapshot;
+  players?: readonly PlayerUiInput[];
+  roomNotice?: string;
+}
+
+export interface PlayerUiInput {
+  id: PlayerSnapshot["id"];
+  label: string;
+  inputOrigin: PlayerSnapshot["inputOrigin"];
+  snakeLength: number;
+  score: number;
+  livesRemaining: number;
+  deathReason: DeathReason | null;
+}
+
+interface PanelSecondaryLabelInput {
+  isMainMenu: boolean;
+  isPvpRoom: boolean;
+  isLocalPvp: boolean;
+  isReady: boolean;
+  pvpStatus: string | null;
+  deathReason: DeathReason | null;
+}
+
+interface PanelMetaLabelInput {
+  isMainMenu: boolean;
+  isPvpRoom: boolean;
+  isLocalPvp: boolean;
+  isReady: boolean;
+  isGameOver: boolean;
+  isReviving: boolean;
+  isRevivePrompt: boolean;
+  roomNotice?: string;
+  pvpStatus: string | null;
+  players: readonly PlayerUiInput[];
+  reviveCountdownSeconds: number;
 }
 
 export interface UiSyncModel {
   rootPhase: GamePhase;
+  shellView: ShellView;
   boardTop: string;
   startPanelHidden: boolean;
+  startButtonHidden: boolean;
   startButtonText: string;
   startButtonAriaLabel: string;
   startButtonDisabled: boolean;
+  entryActionsHidden: boolean;
+  pvpRoomPanelHidden: boolean;
+  roomStatusLabel: string;
+  createRoomButtonDisabled: boolean;
+  joinRoomButtonDisabled: boolean;
+  readyRoomButtonDisabled: boolean;
+  settlementActionsHidden: boolean;
+  continueButtonText: string;
+  continueButtonAriaLabel: string;
+  continueButtonDisabled: boolean;
+  mainMenuButtonText: string;
+  mainMenuButtonAriaLabel: string;
+  mainMenuButtonDisabled: boolean;
   pauseButtonDisabled: boolean;
   pauseButtonText: string;
   pauseButtonAriaLabel: string;
@@ -112,6 +190,7 @@ export interface UiSyncModel {
   stateLabel: string;
   fpsLabel: string;
   sizeLabel: string;
+  perfLabel: string;
 }
 
 export interface TickerUiInput {
@@ -128,11 +207,26 @@ export interface TickerUiModel {
 export function createUiSyncState(): UiSyncState {
   return {
     rootPhase: "",
+    shellView: "",
     boardTop: "",
     startPanelHidden: false,
+    startButtonHidden: false,
     startButtonText: "",
     startButtonAriaLabel: "",
     startButtonDisabled: false,
+    entryActionsHidden: true,
+    pvpRoomPanelHidden: true,
+    roomStatusLabel: "",
+    createRoomButtonDisabled: false,
+    joinRoomButtonDisabled: false,
+    readyRoomButtonDisabled: false,
+    settlementActionsHidden: true,
+    continueButtonText: "",
+    continueButtonAriaLabel: "",
+    continueButtonDisabled: false,
+    mainMenuButtonText: "",
+    mainMenuButtonAriaLabel: "",
+    mainMenuButtonDisabled: false,
     pauseButtonDisabled: false,
     pauseButtonText: "",
     pauseButtonAriaLabel: "",
@@ -148,6 +242,7 @@ export function createUiSyncState(): UiSyncState {
     stateLabel: "",
     fpsLabel: "",
     sizeLabel: "",
+    perfLabel: "",
     tickerCurrentText: "",
     tickerNextText: "",
     tickerCurrentOpacity: "",
@@ -157,9 +252,31 @@ export function createUiSyncState(): UiSyncState {
 
 export function buildGameSnapshot(input: GameSnapshotInput): GameSnapshot {
   const speedCue = buildSpeedCueSnapshot(input.speedCue, input.elapsed);
+  const players = input.players?.map((player) => buildPlayerSnapshot(player)) ?? [
+    buildPlayerSnapshot({
+      id: "p1",
+      label: "P1",
+      inputOrigin: "local",
+      snake: input.snake,
+      direction: input.direction,
+      score: input.score,
+      highScore: input.highScore,
+      livesRemaining: input.livesRemaining,
+      deathReason: input.deathReason,
+      speedMode: input.speedMode,
+      speedMultiplier: input.speedMultiplier,
+      speedCue: input.speedCue,
+      reviving: input.reviving,
+      reviveEndsAt: input.reviveEndsAt,
+      elapsed: input.elapsed,
+      wallGrace: input.wallGrace,
+    }),
+  ];
 
   return {
     phase: input.phase,
+    match: input.match,
+    players,
     grid: input.grid,
     snake: input.snake,
     foods: input.foods,
@@ -185,45 +302,113 @@ export function buildGameSnapshot(input: GameSnapshotInput): GameSnapshot {
   };
 }
 
+function buildPlayerSnapshot(input: PlayerSnapshotInput): PlayerSnapshot {
+  return {
+    id: input.id,
+    label: input.label,
+    inputOrigin: input.inputOrigin,
+    snake: input.snake.map((cell) => ({ ...cell })),
+    direction: input.direction,
+    score: input.score,
+    highScore: input.highScore,
+    livesRemaining: input.livesRemaining,
+    deathReason: input.deathReason,
+    speedMode: input.speedMode,
+    speedMultiplier: input.speedMultiplier,
+    speedCue: buildSpeedCueSnapshot(input.speedCue, input.elapsed),
+    wallGrace: input.wallGrace,
+    reviveCountdownSeconds: getReviveCountdownSeconds(input.reviving, input.reviveEndsAt, input.elapsed),
+  };
+}
+
 export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
+  const shellView = input.shellView ?? "active-run";
   const unlockCopy = getNextLengthUnlockCopy(input.progress);
   const isReady = input.phase === "ready";
   const isRevivePrompt = input.phase === "revivePrompt";
   const isReviving = input.phase === "reviving";
   const isGameOver = input.phase === "gameOver";
+  const isMainMenu = isReady && shellView === "main-menu";
+  const isPvpRoom = isReady && shellView === "pvp-room";
+  const isRunReady = isReady && shellView === "active-run";
+  const isSettlement = isGameOver || isRevivePrompt;
   const currentLengthDisplay = `${input.progress.snakeLength}/100`;
+  const isLocalPvp = input.match.mode === "local-pvp";
+  const playerSummary = isLocalPvp ? getPlayerSummary(input.players ?? []) : null;
+  const pvpStatus = isLocalPvp ? getPvpStatus(input.match, input.players ?? []) : null;
+  const panelPrimaryValue = isMainMenu
+    ? "NEON SERPENT"
+    : isPvpRoom
+      ? "PVP 房间"
+      : isReady
+        ? isLocalPvp ? "LOCAL PVP" : "NEON SERPENT"
+        : playerSummary ?? currentLengthDisplay;
+  const lengthLabel = playerSummary ?? currentLengthDisplay;
+  const unlockTitleLabel = isLocalPvp ? "LOCAL PVP" : unlockCopy.title;
+  const unlockValueLabel = isLocalPvp ? pvpStatus ?? `Tick ${input.match.tick}` : unlockCopy.value;
   const reviveCountdownSeconds = getReviveCountdownSeconds(input.reviving, input.reviveEndsAt, input.elapsed);
+  const panelSecondaryLabel = getPanelSecondaryLabel({
+    isMainMenu,
+    isPvpRoom,
+    isLocalPvp,
+    isReady,
+    pvpStatus,
+    deathReason: input.deathReason,
+  });
+  const panelMetaLabel = getPanelMetaLabel({
+    isMainMenu,
+    isPvpRoom,
+    isLocalPvp,
+    isReady,
+    isGameOver,
+    isReviving,
+    isRevivePrompt,
+    roomNotice: input.roomNotice,
+    pvpStatus,
+    players: input.players ?? [],
+    reviveCountdownSeconds,
+  });
 
   return {
     rootPhase: input.phase,
+    shellView,
     boardTop: `${input.grid.offsetY}px`,
     startPanelHidden: !(isReady || isGameOver || isRevivePrompt),
-    startButtonText: isReady ? "开始游戏" : isGameOver ? "重开" : "复活",
-    startButtonAriaLabel: isReady ? "开始游戏" : isGameOver ? "重新开始" : "确认复活",
+    startButtonHidden: !isRunReady,
+    startButtonText: "开始游戏",
+    startButtonAriaLabel: "开始游戏",
     startButtonDisabled: isReviving,
+    entryActionsHidden: !isMainMenu,
+    pvpRoomPanelHidden: !isPvpRoom,
+    roomStatusLabel: input.roomNotice ?? "联机房间服务将在下一步接入；当前仅保留开发烟测入口。",
+    createRoomButtonDisabled: false,
+    joinRoomButtonDisabled: false,
+    readyRoomButtonDisabled: false,
+    settlementActionsHidden: !isSettlement,
+    continueButtonText: "继续游戏",
+    continueButtonAriaLabel: "继续游戏",
+    continueButtonDisabled: isReviving,
+    mainMenuButtonText: "回到主界面",
+    mainMenuButtonAriaLabel: "回到主界面",
+    mainMenuButtonDisabled: false,
     pauseButtonDisabled: input.phase !== "playing" && input.phase !== "paused",
     pauseButtonText: input.phase === "paused" ? "▶" : "❚❚",
     pauseButtonAriaLabel: input.phase === "paused" ? "继续游戏" : "暂停游戏",
-    panelPrimaryLabel: isReady ? "准备开始" : "当前/目标长度",
-    panelPrimaryValue: isReady ? "NEON SERPENT" : currentLengthDisplay,
-    panelSecondaryLabel: isReady ? "霓虹吞星" : getDeathReasonText(input.deathReason),
-    panelMetaHidden: isRevivePrompt,
-    panelMetaLabel: isReady
-      ? "长按方向键加速·长按Shift减速"
-      : isGameOver
-        ? "按开始重开"
-        : isReviving
-          ? `${reviveCountdownSeconds} 秒后开始`
-          : "",
+    panelPrimaryLabel: isMainMenu ? "选择模式" : isPvpRoom ? "双蛇竞技" : isReady ? "准备开始" : isLocalPvp ? "PVP 结算" : "当前/目标长度",
+    panelPrimaryValue,
+    panelSecondaryLabel,
+    panelMetaHidden: false,
+    panelMetaLabel,
     lifeHeartActiveStates: Array.from({ length: input.lifeHeartCount }, (_, index) =>
       index < input.livesRemaining ? "true" : "false",
     ),
-    lengthLabel: currentLengthDisplay,
-    unlockTitleLabel: unlockCopy.title,
-    unlockValueLabel: unlockCopy.value,
+    lengthLabel,
+    unlockTitleLabel,
+    unlockValueLabel,
     stateLabel: PHASE_LABELS[input.phase],
     fpsLabel: `${input.lastFps || "--"} FPS`,
     sizeLabel: `${input.size.width} x ${input.size.height} @${input.size.dpr.toFixed(1)}`,
+    perfLabel: `逻辑 ${input.lastSimulationMs.toFixed(1)}ms · 渲染 ${input.lastRenderMs.toFixed(1)}ms`,
   };
 }
 
@@ -252,6 +437,11 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
     state.rootPhase = model.rootPhase;
   }
 
+  if (state.shellView !== model.shellView) {
+    ui.root.dataset.shellView = model.shellView;
+    state.shellView = model.shellView;
+  }
+
   if (state.boardTop !== model.boardTop) {
     ui.root.style.setProperty("--board-top", model.boardTop);
     state.boardTop = model.boardTop;
@@ -260,6 +450,11 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
   if (state.startPanelHidden !== model.startPanelHidden) {
     ui.startPanel.hidden = model.startPanelHidden;
     state.startPanelHidden = model.startPanelHidden;
+  }
+
+  if (state.startButtonHidden !== model.startButtonHidden) {
+    ui.startButton.hidden = model.startButtonHidden;
+    state.startButtonHidden = model.startButtonHidden;
   }
 
   if (state.startButtonText !== model.startButtonText) {
@@ -275,6 +470,71 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
   if (state.startButtonDisabled !== model.startButtonDisabled) {
     ui.startButton.disabled = model.startButtonDisabled;
     state.startButtonDisabled = model.startButtonDisabled;
+  }
+
+  if (state.entryActionsHidden !== model.entryActionsHidden) {
+    ui.entryActions.hidden = model.entryActionsHidden;
+    state.entryActionsHidden = model.entryActionsHidden;
+  }
+
+  if (state.pvpRoomPanelHidden !== model.pvpRoomPanelHidden) {
+    ui.pvpRoomPanel.hidden = model.pvpRoomPanelHidden;
+    state.pvpRoomPanelHidden = model.pvpRoomPanelHidden;
+  }
+
+  if (state.roomStatusLabel !== model.roomStatusLabel) {
+    ui.roomStatusLabel.textContent = model.roomStatusLabel;
+    state.roomStatusLabel = model.roomStatusLabel;
+  }
+
+  if (state.createRoomButtonDisabled !== model.createRoomButtonDisabled) {
+    ui.createRoomButton.disabled = model.createRoomButtonDisabled;
+    state.createRoomButtonDisabled = model.createRoomButtonDisabled;
+  }
+
+  if (state.joinRoomButtonDisabled !== model.joinRoomButtonDisabled) {
+    ui.joinRoomButton.disabled = model.joinRoomButtonDisabled;
+    state.joinRoomButtonDisabled = model.joinRoomButtonDisabled;
+  }
+
+  if (state.readyRoomButtonDisabled !== model.readyRoomButtonDisabled) {
+    ui.readyRoomButton.disabled = model.readyRoomButtonDisabled;
+    state.readyRoomButtonDisabled = model.readyRoomButtonDisabled;
+  }
+
+  if (state.settlementActionsHidden !== model.settlementActionsHidden) {
+    ui.settlementActions.hidden = model.settlementActionsHidden;
+    state.settlementActionsHidden = model.settlementActionsHidden;
+  }
+
+  if (state.continueButtonText !== model.continueButtonText) {
+    ui.continueButton.textContent = model.continueButtonText;
+    state.continueButtonText = model.continueButtonText;
+  }
+
+  if (state.continueButtonAriaLabel !== model.continueButtonAriaLabel) {
+    ui.continueButton.setAttribute("aria-label", model.continueButtonAriaLabel);
+    state.continueButtonAriaLabel = model.continueButtonAriaLabel;
+  }
+
+  if (state.continueButtonDisabled !== model.continueButtonDisabled) {
+    ui.continueButton.disabled = model.continueButtonDisabled;
+    state.continueButtonDisabled = model.continueButtonDisabled;
+  }
+
+  if (state.mainMenuButtonText !== model.mainMenuButtonText) {
+    ui.mainMenuButton.textContent = model.mainMenuButtonText;
+    state.mainMenuButtonText = model.mainMenuButtonText;
+  }
+
+  if (state.mainMenuButtonAriaLabel !== model.mainMenuButtonAriaLabel) {
+    ui.mainMenuButton.setAttribute("aria-label", model.mainMenuButtonAriaLabel);
+    state.mainMenuButtonAriaLabel = model.mainMenuButtonAriaLabel;
+  }
+
+  if (state.mainMenuButtonDisabled !== model.mainMenuButtonDisabled) {
+    ui.mainMenuButton.disabled = model.mainMenuButtonDisabled;
+    state.mainMenuButtonDisabled = model.mainMenuButtonDisabled;
   }
 
   if (state.pauseButtonDisabled !== model.pauseButtonDisabled) {
@@ -362,6 +622,11 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
     ui.sizeLabel.textContent = model.sizeLabel;
     state.sizeLabel = model.sizeLabel;
   }
+
+  if (state.perfLabel !== model.perfLabel) {
+    ui.stateLabel.title = model.perfLabel;
+    state.perfLabel = model.perfLabel;
+  }
 }
 
 export function applyTickerUiModel(ui: GameUiElements, state: UiSyncState, model: TickerUiModel): void {
@@ -384,6 +649,98 @@ export function applyTickerUiModel(ui: GameUiElements, state: UiSyncState, model
     ui.tickerNextLabel.style.opacity = model.nextOpacity;
     state.tickerNextOpacity = model.nextOpacity;
   }
+}
+
+function getPlayerSummary(players: readonly PlayerUiInput[]): string | null {
+  if (players.length === 0) {
+    return null;
+  }
+
+  return players
+    .map((player) => `${player.label} ${player.score}/${player.snakeLength}`)
+    .join(" · ");
+}
+
+function getPvpStatus(match: MatchSnapshot, players: readonly PlayerUiInput[]): string | null {
+  if (match.winnerId) {
+    const winner = players.find((player) => player.id === match.winnerId);
+
+    return `${winner?.label ?? match.winnerId} 获胜`;
+  }
+
+  if (match.phase === "gameOver") {
+    return "平局";
+  }
+
+  if (match.phase === "playing") {
+    return `Tick ${match.tick}`;
+  }
+
+  return null;
+}
+
+function getPanelSecondaryLabel(input: PanelSecondaryLabelInput): string {
+  if (input.isMainMenu) {
+    return "PVE 单人冒险 / PVP 双蛇竞技";
+  }
+
+  if (input.isPvpRoom) {
+    return "房间服务尚未接入";
+  }
+
+  if (input.isLocalPvp) {
+    return input.pvpStatus ?? "本地双人模拟";
+  }
+
+  if (input.isReady) {
+    return "单人冒险";
+  }
+
+  return getDeathReasonText(input.deathReason);
+}
+
+function getPanelMetaLabel(input: PanelMetaLabelInput): string {
+  if (input.isMainMenu) {
+    return "选择单人冒险，或进入 PVP 房间面板查看下一步联机入口。";
+  }
+
+  if (input.isPvpRoom) {
+    return input.roomNotice ?? "联机房间服务将在下一步接入；当前不会创建真实房间。";
+  }
+
+  if (input.isReady) {
+    return input.isLocalPvp ? "P1 本地控制，P2 脚本模拟" : "长按方向键加速 · 长按 Shift 减速";
+  }
+
+  if (input.isGameOver && input.isLocalPvp) {
+    return getPvpSettlementText(input.pvpStatus, input.players);
+  }
+
+  if (input.isGameOver) {
+    return "可继续游戏或回到主界面";
+  }
+
+  if (input.isReviving) {
+    return `${input.reviveCountdownSeconds} 秒后开始`;
+  }
+
+  if (input.isRevivePrompt) {
+    return "可继续游戏或回到主界面";
+  }
+
+  return "";
+}
+
+function getPvpSettlementText(pvpStatus: string | null, players: readonly PlayerUiInput[]): string {
+  const playerDetails = players
+    .map((player) => {
+      const death = player.deathReason ? getDeathReasonText(player.deathReason) : "存活";
+
+      return `${player.label}：${player.score}分 / 长度${player.snakeLength} / ${death}`;
+    })
+    .join("；");
+
+  return `${pvpStatus ?? "平局"}。${playerDetails}`;
 }
 
 function buildSpeedCueSnapshot(speedCue: SpeedCueState | null, elapsed: number): GameSnapshot["speedCue"] {

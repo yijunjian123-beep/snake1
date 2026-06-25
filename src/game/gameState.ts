@@ -4,7 +4,13 @@ import type {
   Direction,
   GamePhase,
   GameSnapshot,
+  ShellView,
   GridCell,
+  InputAction,
+  InputEventKind,
+  MatchMode,
+  PlayerId,
+  PlayerInputOrigin,
   StarAttractor,
   StarAttractorEffect,
   StarBeast,
@@ -51,11 +57,26 @@ export interface MovementSpeedState {
 
 export interface UiSyncState {
   rootPhase: string;
+  shellView: ShellView | "";
   boardTop: string;
   startPanelHidden: boolean;
+  startButtonHidden: boolean;
   startButtonText: string;
   startButtonAriaLabel: string;
   startButtonDisabled: boolean;
+  entryActionsHidden: boolean;
+  pvpRoomPanelHidden: boolean;
+  roomStatusLabel: string;
+  createRoomButtonDisabled: boolean;
+  joinRoomButtonDisabled: boolean;
+  readyRoomButtonDisabled: boolean;
+  settlementActionsHidden: boolean;
+  continueButtonText: string;
+  continueButtonAriaLabel: string;
+  continueButtonDisabled: boolean;
+  mainMenuButtonText: string;
+  mainMenuButtonAriaLabel: string;
+  mainMenuButtonDisabled: boolean;
   pauseButtonDisabled: boolean;
   pauseButtonText: string;
   pauseButtonAriaLabel: string;
@@ -71,6 +92,7 @@ export interface UiSyncState {
   stateLabel: string;
   fpsLabel: string;
   sizeLabel: string;
+  perfLabel: string;
   tickerCurrentText: string;
   tickerNextText: string;
   tickerCurrentOpacity: string;
@@ -99,6 +121,13 @@ export interface RunLifecycleState {
   birthCell: GridCell;
 }
 
+export interface MatchRuntimeState {
+  mode: MatchMode;
+  phase: GamePhase;
+  tick: number;
+  winnerId: PlayerId | null;
+}
+
 export interface MovementRuntimeState {
   direction: Direction;
   directionQueue: Direction[];
@@ -116,6 +145,8 @@ export interface TimingRuntimeState {
   lastUiUpdate: number;
   lastTickerUpdate: number;
   lastFps: number;
+  lastSimulationMs: number;
+  lastRenderMs: number;
 }
 
 export interface SpeedRuntimeState {
@@ -124,8 +155,7 @@ export interface SpeedRuntimeState {
   currentMovementSpeed: MovementSpeedState;
 }
 
-export interface EntityRuntimeState {
-  snake: GridCell[];
+export interface WorldRuntimeState {
   foods: GridCell[];
   starAttractors: StarAttractor[];
   starAttractorEffects: StarAttractorEffect[];
@@ -144,6 +174,17 @@ export interface ProgressRuntimeState {
   score: number;
   coresEaten: number;
   highScore: number;
+}
+
+export interface PlayerRuntimeState {
+  id: PlayerId;
+  label: string;
+  inputOrigin: PlayerInputOrigin;
+  snake: GridCell[];
+  lifecycle: RunLifecycleState;
+  movement: MovementRuntimeState;
+  speed: SpeedRuntimeState;
+  progress: ProgressRuntimeState;
 }
 
 export type FoodWaveKind = "single" | "cluster";
@@ -166,4 +207,15 @@ export interface SpawnRuntimeState {
 
 export interface InputRuntimeState {
   activeInputSequence: number;
+  lastAppliedSequenceByPlayer: Record<PlayerId, number>;
+  queue: PlayerInputCommand[];
+}
+
+export interface PlayerInputCommand {
+  playerId: PlayerId;
+  tick: number;
+  action: InputAction;
+  kind: InputEventKind;
+  origin: PlayerInputOrigin;
+  sequence: number;
 }

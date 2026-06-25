@@ -1,15 +1,18 @@
 import { FOOD_SPAWN_CONFIG } from "./foodSpawn";
 import { STAR_ATTRACTOR_CONFIG } from "./starAttractor";
 import type {
-  EntityRuntimeState,
   InputRuntimeState,
+  MatchRuntimeState,
   MovementRuntimeState,
+  PlayerRuntimeState,
   ProgressRuntimeState,
   RunLifecycleState,
   SpawnRuntimeState,
   SpeedRuntimeState,
   TimingRuntimeState,
+  WorldRuntimeState,
 } from "./gameState";
+import type { PlayerId, PlayerInputOrigin } from "./types";
 
 const DEFAULT_LIVES = 3;
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
@@ -23,6 +26,18 @@ export function createLifecycleState(phase: RunLifecycleState["phase"] = "ready"
     reviveEndsAt: 0,
     wallGrace: null,
     birthCell: { column: 0, row: 0 },
+  };
+}
+
+export function createMatchState(
+  mode: MatchRuntimeState["mode"] = "solo",
+  phase: RunLifecycleState["phase"] = "ready",
+): MatchRuntimeState {
+  return {
+    mode,
+    phase,
+    tick: 0,
+    winnerId: null,
   };
 }
 
@@ -46,6 +61,8 @@ export function createTimingState(): TimingRuntimeState {
     lastUiUpdate: 0,
     lastTickerUpdate: Number.NEGATIVE_INFINITY,
     lastFps: 0,
+    lastSimulationMs: 0,
+    lastRenderMs: 0,
   };
 }
 
@@ -64,9 +81,8 @@ export function createSpeedState(): SpeedRuntimeState {
   };
 }
 
-export function createEntityState(): EntityRuntimeState {
+export function createWorldState(): WorldRuntimeState {
   return {
-    snake: [],
     foods: [],
     starAttractors: [],
     starAttractorEffects: [],
@@ -90,6 +106,38 @@ export function createProgressState(highScore = 0): ProgressRuntimeState {
   };
 }
 
+export function createPlayerState(
+  id: PlayerId,
+  label: string,
+  inputOrigin: PlayerInputOrigin,
+  phase: RunLifecycleState["phase"] = "ready",
+  highScore = 0,
+): PlayerRuntimeState {
+  return {
+    id,
+    label,
+    inputOrigin,
+    snake: [],
+    lifecycle: createLifecycleState(phase),
+    movement: createMovementState(),
+    speed: createSpeedState(),
+    progress: createProgressState(highScore),
+  };
+}
+
+export function createSoloPlayers(phase: RunLifecycleState["phase"] = "ready", highScore = 0): PlayerRuntimeState[] {
+  return [
+    createPlayerState("p1", "P1", "local", phase, highScore),
+  ];
+}
+
+export function createLocalPvpPlayers(phase: RunLifecycleState["phase"] = "ready"): PlayerRuntimeState[] {
+  return [
+    createPlayerState("p1", "P1", "local", phase, 0),
+    createPlayerState("p2", "P2", "scripted", phase, 0),
+  ];
+}
+
 export function createSpawnState(): SpawnRuntimeState {
   return {
     starAttractorEatCount: 0,
@@ -111,5 +159,10 @@ export function createSpawnState(): SpawnRuntimeState {
 export function createInputState(): InputRuntimeState {
   return {
     activeInputSequence: 0,
+    lastAppliedSequenceByPlayer: {
+      p1: 0,
+      p2: 0,
+    },
+    queue: [],
   };
 }

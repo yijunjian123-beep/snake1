@@ -1,7 +1,7 @@
 import { isBlackHoleCollision } from "./blackHole";
 import type { SnakeAdvanceEvaluation } from "./gameState";
-import { cellsMatch, isInsideGrid } from "./gridMath";
-import type { BlackHole, DeathReason, Direction, GridCell, GridMetrics, StarBeast } from "./types";
+import { cellIndex, cellsMatch, isInsideGrid } from "./gridMath";
+import type { BlackHole, DeathReason, Direction, GridCell, GridMetrics, PlayerId, StarBeast } from "./types";
 
 export type SnakeCollisionResolution =
   | { kind: "none" }
@@ -18,6 +18,24 @@ export interface PlayerBodyCollisionContext {
   grid: GridMetrics;
   snake: readonly GridCell[];
   snakeOccupancy: Uint8Array;
+}
+
+export interface MultiplayerSnakeEvaluation {
+  playerId: PlayerId;
+  direction: Direction;
+  evaluation: SnakeAdvanceEvaluation;
+  snake: readonly GridCell[];
+  willCommit: boolean;
+}
+
+export interface MultiplayerSnakeCollisionContext extends SnakeCollisionContext {
+  grid: GridMetrics;
+}
+
+export interface MultiplayerSnakeCollisionResult {
+  playerId: PlayerId;
+  collision: SnakeCollisionResolution;
+  pickupConflict: boolean;
 }
 
 export function resolveSnakeCollision(
@@ -56,6 +74,26 @@ export function resolveSnakeCollision(
   return { kind: "none" };
 }
 
+export function resolveMultiplayerSnakeCollisions(
+  context: MultiplayerSnakeCollisionContext,
+  evaluations: readonly MultiplayerSnakeEvaluation[],
+): MultiplayerSnakeCollisionResult[] {
+  const results = evaluations.map((entry) => ({
+    playerId: entry.playerId,
+    collision: resolveSnakeCollision(context, entry.evaluation, entry.direction),
+    pickupConflict: false,
+  }));
+  const committedEvaluations = evaluations.filter((entry, index) =>
+    entry.willCommit && results[index]?.collision.kind === "none"
+  );
+
+  markBodyCollisions(context.grid, evaluations, committedEvaluations, results);
+  markHeadToHeadCollisions(committedEvaluations, results);
+  markPickupConflicts(committedEvaluations, results);
+
+  return results;
+}
+
 export function cellCollidesWithPlayerBody(context: PlayerBodyCollisionContext, cell: GridCell): boolean {
   const head = context.snake[0];
 
@@ -63,10 +101,159 @@ export function cellCollidesWithPlayerBody(context: PlayerBodyCollisionContext, 
     return false;
   }
 
-  const index = cell.row * context.grid.columns + cell.column;
+  const index = cellIndex(cell, context.grid);
   const occupancy = context.snakeOccupancy[index] ?? 0;
 
   return occupancy > 0 && !cellsMatch(head, cell);
+}
+
+function markBodyCollisions(
+  grid: GridMetrics,
+  allEvaluations: readonly MultiplayerSnakeEvaluation[],
+  evaluations: readonly MultiplayerSnakeEvaluation[],
+  results: MultiplayerSnakeCollisionResult[],
+): void {
+  const occupiedBodies = new Int16Array(grid.columns * grid.rows);
+
+  for (const entry of allEvaluations) {
+    const result = getMultiplayerResult(results, entry.playerId);
+    const isCommittedMover = entry.willCommit && result?.collision.kind === "none";
+    const firstBlockedSegmentIndex = isCommittedMover ? 1 : 0;
+    const tail = entry.snake[entry.snake.length - 1] ?? null;
+
+    for (let segmentIndex = firstBlockedSegmentIndex; segmentIndex < entry.snake.length; segmentIndex += 1) {
+      const segment = entry.snake[segmentIndex];
+
+      if (!segment || !isInsideGrid(segment, grid)) {
+        continue;
+      }
+
+      if (isCommittedMover && !entry.evaluation.shouldKeepTail && tail && cellsMatch(segment, tail)) {
+        continue;
+      }
+
+      const index = cellIndex(segment, grid);
+      occupiedBodies[index] = (occupiedBodies[index] ?? 0) + 1;
+    }
+  }
+
+  for (const entry of evaluations) {
+    const resultIndex = getMultiplayerResultIndex(results, entry.playerId);
+
+    if (resultIndex === -1 || results[resultIndex]?.collision.kind !== "none" || !isInsideGrid(entry.evaluation.nextHead, grid)) {
+      continue;
+    }
+
+    if ((occupiedBodies[cellIndex(entry.evaluation.nextHead, grid)] ?? 0) > 0) {
+      results[resultIndex] = {
+        ...results[resultIndex]!,
+        collision: {
+          kind: "death",
+          reason: "snake_body",
+        },
+      };
+    }
+  }
+}
+
+function markHeadToHeadCollisions(
+  evaluations: readonly MultiplayerSnakeEvaluation[],
+  results: MultiplayerSnakeCollisionResult[],
+): void {
+  for (let leftIndex = 0; leftIndex < evaluations.length; leftIndex += 1) {
+    const left = evaluations[leftIndex];
+    const leftResultIndex = left ? getMultiplayerResultIndex(results, left.playerId) : -1;
+
+    if (!left || leftResultIndex === -1 || results[leftResultIndex]?.collision.kind !== "none") {
+      continue;
+    }
+
+    for (let rightIndex = leftIndex + 1; rightIndex < evaluations.length; rightIndex += 1) {
+      const right = evaluations[rightIndex];
+      const rightResultIndex = right ? getMultiplayerResultIndex(results, right.playerId) : -1;
+
+      if (!right || rightResultIndex === -1 || results[rightResultIndex]?.collision.kind !== "none") {
+        continue;
+      }
+
+      if (!cellsMatch(left.evaluation.nextHead, right.evaluation.nextHead)) {
+        continue;
+      }
+
+      results[leftResultIndex] = {
+        ...results[leftResultIndex]!,
+        collision: {
+          kind: "death",
+          reason: "snake_body",
+        },
+      };
+      results[rightResultIndex] = {
+        ...results[rightResultIndex]!,
+        collision: {
+          kind: "death",
+          reason: "snake_body",
+        },
+      };
+    }
+  }
+}
+
+function markPickupConflicts(
+  evaluations: readonly MultiplayerSnakeEvaluation[],
+  results: MultiplayerSnakeCollisionResult[],
+): void {
+  for (let leftIndex = 0; leftIndex < evaluations.length; leftIndex += 1) {
+    const left = evaluations[leftIndex];
+    const leftResultIndex = left ? getMultiplayerResultIndex(results, left.playerId) : -1;
+
+    if (!left || leftResultIndex === -1 || results[leftResultIndex]?.collision.kind !== "none") {
+      continue;
+    }
+
+    for (let rightIndex = leftIndex + 1; rightIndex < evaluations.length; rightIndex += 1) {
+      const right = evaluations[rightIndex];
+      const rightResultIndex = right ? getMultiplayerResultIndex(results, right.playerId) : -1;
+
+      if (!right || rightResultIndex === -1 || results[rightResultIndex]?.collision.kind !== "none") {
+        continue;
+      }
+
+      if (left.evaluation.ateFoodIndex === -1 && left.evaluation.ateStarCoreIndex === -1) {
+        continue;
+      }
+
+      const sameFood = left.evaluation.ateFoodIndex !== -1 && left.evaluation.ateFoodIndex === right.evaluation.ateFoodIndex;
+      const sameCore = left.evaluation.ateStarCoreIndex !== -1 && left.evaluation.ateStarCoreIndex === right.evaluation.ateStarCoreIndex;
+
+      if (!sameFood && !sameCore) {
+        continue;
+      }
+
+      const leftWins = left.playerId <= right.playerId;
+      const loserIndex = leftWins ? rightResultIndex : leftResultIndex;
+
+      results[loserIndex] = {
+        ...results[loserIndex]!,
+        pickupConflict: true,
+      };
+    }
+  }
+}
+
+function getMultiplayerResult(
+  results: readonly MultiplayerSnakeCollisionResult[],
+  playerId: PlayerId,
+): MultiplayerSnakeCollisionResult | null {
+  const resultIndex = getMultiplayerResultIndex(results, playerId);
+
+  return resultIndex === -1 ? null : results[resultIndex] ?? null;
+}
+
+function getMultiplayerResultIndex(
+  results: readonly MultiplayerSnakeCollisionResult[],
+  playerId: PlayerId,
+): number {
+  return results.findIndex((result) => result.playerId === playerId);
 }
 
 export function cellCollidesWithStarBeast(cell: GridCell, starBeasts: readonly StarBeast[]): boolean {

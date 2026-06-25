@@ -9,6 +9,18 @@ export function cellKey(cell: GridCell): string {
   return `${cell.column}:${cell.row}`;
 }
 
+export function cellIndex(cell: GridCell, grid: GridMetrics): number {
+  return cell.row * grid.columns + cell.column;
+}
+
+export function getCellIndex(cell: GridCell, grid: GridMetrics): number | null {
+  if (!isInsideGrid(cell, grid)) {
+    return null;
+  }
+
+  return cellIndex(cell, grid);
+}
+
 export function cellsMatch(left: GridCell, right: GridCell): boolean {
   return left.column === right.column && left.row === right.row;
 }

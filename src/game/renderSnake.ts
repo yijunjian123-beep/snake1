@@ -9,7 +9,7 @@ import {
 } from "./renderCanvasUtils";
 import type { RenderQualityState } from "./renderQuality";
 import type { TrailSample } from "./renderState";
-import type { Direction, GameSnapshot, GridCell, GridMetrics, SpeedMode } from "./types";
+import type { Direction, GameSnapshot, GridCell, GridMetrics, PlayerSnapshot, SpeedMode } from "./types";
 
 interface RenderSnakeOptions {
   quality: RenderQualityState;
@@ -70,6 +70,17 @@ const SPEED_TONES: Record<SpeedMode, SpeedTone> = {
   },
 };
 
+const PLAYER_TWO_BASE_TONE: SpeedTone = {
+  label: "对手",
+  panel: "rgba(16, 8, 18, 0.7)",
+  border: "rgba(255, 178, 78, 0.46)",
+  text: "#fff7ec",
+  glow: "#ff7a2f",
+  trail: "#ffb24e",
+  head: "#ffffff",
+  body: "#ff5fd2",
+};
+
 export function drawSnakeTrail(
   context: CanvasRenderingContext2D,
   snapshot: GameSnapshot,
@@ -77,20 +88,27 @@ export function drawSnakeTrail(
   time: number,
   options: RenderSnakeOptions,
 ): void {
-  const { grid, speedMode } = snapshot;
+  const { grid } = snapshot;
   const cellGap = Math.max(2, grid.cellSize * 0.12);
   const segmentSize = grid.cellSize - cellGap * 2;
-  const speedTone = getSpeedTone(speedMode);
-  const tintStrength = speedMode === "base" ? 0 : Math.min(1, Math.abs(snapshot.speedMultiplier - 1) / 0.67);
-  const cueStrength = getSpeedCueStrength(snapshot);
-  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
-  const cueVisualStrength = cueStrength * cueIntroStrength;
-  const snakeBrightness = getSnakeBrightnessScale(speedMode);
 
   context.save();
   context.globalCompositeOperation = "lighter";
 
   for (const sample of trails) {
+    const player = snapshot.players.find((candidate) => candidate.id === sample.playerId);
+
+    if (!player) {
+      continue;
+    }
+
+    const { speedMode } = player;
+    const speedTone = getPlayerTone(player);
+    const tintStrength = speedMode === "base" ? 0 : Math.min(1, Math.abs(player.speedMultiplier - 1) / 0.67);
+    const cueStrength = getSpeedCueStrength(player);
+    const cueIntroStrength = getSpeedCueIntroStrength(player, time);
+    const cueVisualStrength = cueStrength * cueIntroStrength;
+    const snakeBrightness = getSnakeBrightnessScale(speedMode);
     const alpha = clamp(sample.life / sample.maxLife, 0, 1);
 
     for (let index = sample.cells.length - 1; index >= 0; index -= 1) {
@@ -106,11 +124,11 @@ export function drawSnakeTrail(
       const bodyLightness = speedMode === "base" ? scaleLightness(50 + age * 24, snakeBrightness) : 50 + age * 24;
 
       context.globalAlpha = alpha * (0.06 + age * 0.18) * (1 + tintStrength * 0.08 + cueVisualStrength * 0.14);
-      context.shadowColor = index === 0 ? speedTone.head : speedMode === "base" ? "#00f5ff" : speedTone.trail;
+      context.shadowColor = index === 0 ? speedTone.head : speedTone.trail;
       context.shadowBlur = (18 + tintStrength * 8 + cueVisualStrength * 10) * alpha * snakeBrightness * options.quality.glowScale;
       context.fillStyle = index === 0
         ? speedTone.head
-        : speedMode === "base"
+        : speedMode === "base" && player.id === "p1"
           ? `hsl(${184 + age * 76} 100% ${bodyLightness}%)`
           : speedTone.body;
       fillRoundedRect(context, x, y, segmentSize, segmentSize, index === 0 ? 9 : 7);
@@ -126,22 +144,47 @@ export function drawSnake(
   time: number,
   options: RenderSnakeOptions,
 ): void {
-  const { direction, grid, phase, snake, speedMode } = snapshot;
+  const { grid, phase } = snapshot;
   const cellGap = Math.max(2, grid.cellSize * 0.12);
   const segmentSize = grid.cellSize - cellGap * 2;
   const isGameOver = phase === "gameOver";
-  const speedTone = getSpeedTone(speedMode);
-  const tintStrength = speedMode === "base" ? 0 : Math.min(1, Math.abs(snapshot.speedMultiplier - 1) / 0.67);
-  const cueStrength = getSpeedCueStrength(snapshot);
-  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
+
+  for (const player of snapshot.players) {
+    drawPlayerSnake(context, snapshot, player, time, options, {
+      cellGap,
+      segmentSize,
+      isGameOver,
+    });
+  }
+
+  if (!isGameOver) {
+    drawBlackHoleCue(context, snapshot, time);
+  }
+}
+
+function drawPlayerSnake(
+  context: CanvasRenderingContext2D,
+  snapshot: GameSnapshot,
+  player: PlayerSnapshot,
+  time: number,
+  options: RenderSnakeOptions,
+  layout: { cellGap: number; segmentSize: number; isGameOver: boolean },
+): void {
+  const { grid } = snapshot;
+  const { direction, snake, speedMode } = player;
+  const { cellGap, segmentSize, isGameOver } = layout;
+  const speedTone = getPlayerTone(player);
+  const tintStrength = speedMode === "base" ? 0 : Math.min(1, Math.abs(player.speedMultiplier - 1) / 0.67);
+  const cueStrength = getSpeedCueStrength(player);
+  const cueIntroStrength = getSpeedCueIntroStrength(player, time);
   const cueVisualStrength = cueStrength * cueIntroStrength;
   const snakeBrightness = getSnakeBrightnessScale(speedMode);
 
-  drawSnakePathGlow(context, grid, snake, snapshot, time, speedMode, options);
+  drawSnakePathGlow(context, grid, snake, player, time, speedMode, options);
 
   context.save();
   context.globalCompositeOperation = "lighter";
-  drawSpeedPulse(context, snapshot, time, options);
+  drawSpeedPulse(context, snapshot, player, time, options);
   const glowScale = options.quality.glowScale;
 
   for (let index = snake.length - 1; index >= 0; index -= 1) {
@@ -157,7 +200,7 @@ export function drawSnake(
     const y = grid.offsetY + segment.row * grid.cellSize + cellGap;
     const pulse = 0.72 + Math.sin(time * 5.2 + index * 0.55) * 0.28;
     context.globalAlpha = isGameOver ? 0.56 : 0.78 + age * 0.22 + tintStrength * 0.06 + cueVisualStrength * 0.08;
-    context.shadowColor = isHead ? speedTone.head : speedMode === "base" ? "#00f5ff" : speedTone.trail;
+    context.shadowColor = isHead ? speedTone.head : speedTone.trail;
     context.shadowBlur = isHead
       ? (30 + tintStrength * 8 + cueVisualStrength * 10) * snakeBrightness * glowScale
       : (17 + pulse * 8 + tintStrength * 5 + cueVisualStrength * 4) * snakeBrightness * glowScale;
@@ -173,7 +216,7 @@ export function drawSnake(
       );
       headGradient.addColorStop(0, "#ffffff");
       headGradient.addColorStop(0.32, speedTone.head);
-      headGradient.addColorStop(1, speedMode === "base" ? "#00f5ff" : speedTone.body);
+      headGradient.addColorStop(1, speedTone.body);
       context.fillStyle = headGradient;
       fillRoundedRect(context, x - 1, y - 1, segmentSize + 2, segmentSize + 2, 9);
 
@@ -186,10 +229,10 @@ export function drawSnake(
         context.stroke();
       }
     } else {
-      const baseColor = speedMode === "base"
+      const baseColor = speedMode === "base" && player.id === "p1"
         ? `hsl(${178 + age * 76} 100% ${scaleLightness(50 + age * 24, snakeBrightness)}%)`
         : speedTone.body;
-      const edgeColor = speedMode === "base"
+      const edgeColor = speedMode === "base" && player.id === "p1"
         ? `hsl(${194 + age * 58} 100% ${scaleLightness(64 + age * 12, snakeBrightness)}%)`
         : speedTone.text;
       const bodyFill = context.createLinearGradient(x, y, x + segmentSize, y + segmentSize);
@@ -201,7 +244,9 @@ export function drawSnake(
       fillRoundedRect(context, x, y, segmentSize, segmentSize, 7);
 
       context.globalAlpha = isGameOver ? 0.24 : 0.34 + age * 0.22 + cueVisualStrength * 0.05;
-      context.fillStyle = speedMode === "base" ? `rgba(255, 255, 255, ${scaleAlpha(0.72, snakeBrightness)})` : speedTone.text;
+      context.fillStyle = speedMode === "base" && player.id === "p1"
+        ? `rgba(255, 255, 255, ${scaleAlpha(0.72, snakeBrightness)})`
+        : speedTone.text;
       fillRoundedRect(
         context,
         x + segmentSize * 0.22,
@@ -219,10 +264,6 @@ export function drawSnake(
     drawHeadCue(context, grid, head, direction);
   }
 
-  if (!isGameOver) {
-    drawBlackHoleCue(context, snapshot, time);
-  }
-
   context.restore();
 }
 
@@ -230,23 +271,31 @@ function getSpeedTone(mode: SpeedMode): SpeedTone {
   return SPEED_TONES[mode];
 }
 
-function getSpeedCueStrength(snapshot: GameSnapshot): number {
-  if (!snapshot.speedCue || snapshot.speedCue.mode !== snapshot.speedMode) {
+function getPlayerTone(player: PlayerSnapshot): SpeedTone {
+  if (player.id === "p2" && player.speedMode === "base") {
+    return PLAYER_TWO_BASE_TONE;
+  }
+
+  return getSpeedTone(player.speedMode);
+}
+
+function getSpeedCueStrength(player: PlayerSnapshot): number {
+  if (!player.speedCue || player.speedCue.mode !== player.speedMode) {
     return 0;
   }
 
-  const fade = Math.max(0, Math.min(1, 1 - snapshot.speedCue.fadeProgress));
+  const fade = Math.max(0, Math.min(1, 1 - player.speedCue.fadeProgress));
 
   return fade * fade;
 }
 
-function getSpeedCueIntroStrength(snapshot: GameSnapshot, time: number): number {
-  if (!snapshot.speedCue || snapshot.speedCue.mode !== snapshot.speedMode) {
+function getSpeedCueIntroStrength(player: PlayerSnapshot, time: number): number {
+  if (!player.speedCue || player.speedCue.mode !== player.speedMode) {
     return 0;
   }
 
   const introDurationSeconds = 0.15;
-  const progress = clamp((time - snapshot.speedCue.startedAt) / introDurationSeconds, 0, 1);
+  const progress = clamp((time - player.speedCue.startedAt) / introDurationSeconds, 0, 1);
 
   return easeOutCubic(progress);
 }
@@ -259,7 +308,7 @@ function drawSnakePathGlow(
   context: CanvasRenderingContext2D,
   grid: GridMetrics,
   snake: readonly GridCell[],
-  snapshot: GameSnapshot,
+  player: PlayerSnapshot,
   time: number,
   speedMode: SpeedMode,
   options: RenderSnakeOptions,
@@ -268,11 +317,11 @@ function drawSnakePathGlow(
     return;
   }
 
-  const speedTone = getSpeedTone(speedMode);
+  const speedTone = getPlayerTone(player);
   const modeIntensity = speedMode === "boost" ? 1.18 : speedMode === "accelerate" ? 1.08 : speedMode === "brake" ? 1.12 : 1;
   const snakeBrightness = getSnakeBrightnessScale(speedMode);
-  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
-  const cueVisualStrength = getSpeedCueStrength(snapshot) * cueIntroStrength;
+  const cueIntroStrength = getSpeedCueIntroStrength(player, time);
+  const cueVisualStrength = getSpeedCueStrength(player) * cueIntroStrength;
 
   context.save();
   context.globalCompositeOperation = "lighter";
@@ -301,15 +350,17 @@ function drawSnakePathGlow(
     context.shadowBlur = (pass === 0 ? 18 : 10) * cueBoost * modeIntensity * snakeBrightness * glowScale;
     context.strokeStyle =
       pass === 0
-        ? speedMode === "base"
+        ? speedMode === "base" && player.id === "p1"
           ? `rgba(0, 245, 255, ${0.34 * snakeBrightness})`
           : speedMode === "brake"
             ? "rgba(255, 74, 74, 0.42)"
             : speedMode === "boost"
               ? "rgba(255, 255, 255, 0.42)"
-              : "rgba(0, 245, 255, 0.42)"
-        : speedMode === "base"
+              : player.id === "p2" ? "rgba(255, 178, 78, 0.42)" : "rgba(0, 245, 255, 0.42)"
+        : speedMode === "base" && player.id === "p1"
           ? `rgba(219, 255, 82, ${scaleAlpha(0.22 + pulse * 0.16, snakeBrightness)})`
+          : speedMode === "base"
+            ? `rgba(255, 95, 210, ${scaleAlpha(0.2 + pulse * 0.18, snakeBrightness)})`
           : speedMode === "brake"
             ? `rgba(255, 138, 138, ${0.2 + pulse * 0.16})`
             : speedMode === "boost"
@@ -325,10 +376,11 @@ function drawSnakePathGlow(
 function drawSpeedPulse(
   context: CanvasRenderingContext2D,
   snapshot: GameSnapshot,
+  player: PlayerSnapshot,
   time: number,
   options: RenderSnakeOptions,
 ): void {
-  const cue = snapshot.speedCue;
+  const cue = player.speedCue;
 
   if (snapshot.phase !== "playing" || !cue) {
     return;
@@ -336,8 +388,8 @@ function drawSpeedPulse(
 
   const tone = getSpeedTone(cue.mode);
   const center = cellCenter(snapshot.grid, cue.anchor);
-  const cueStrength = getSpeedCueStrength(snapshot);
-  const cueIntroStrength = getSpeedCueIntroStrength(snapshot, time);
+  const cueStrength = getSpeedCueStrength(player);
+  const cueIntroStrength = getSpeedCueIntroStrength(player, time);
   const cueVisualStrength = cueStrength * cueIntroStrength;
   const pulse = options.reducedMotionPreferred ? 1 : 0.92 + Math.sin(time * 10.2 + cue.startedAt * 0.004) * 0.08;
   const radius = snapshot.grid.cellSize * (0.24 + cueVisualStrength * 1.06);

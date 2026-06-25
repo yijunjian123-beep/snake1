@@ -5,7 +5,12 @@ import {
   resolveBlackHoleMovement,
   type BlackHoleGravityState,
 } from "./blackHole";
-import { cellCollidesWithPlayerBody, resolveSnakeCollision } from "./collisionSystem";
+import {
+  cellCollidesWithPlayerBody,
+  resolveMultiplayerSnakeCollisions,
+  resolveSnakeCollision,
+  type MultiplayerSnakeEvaluation,
+} from "./collisionSystem";
 import { createInputController } from "./input";
 import { spawnFoodCell } from "./foodSpawn";
 import {
@@ -22,9 +27,11 @@ import { OPPOSITE_DIRECTIONS } from "./direction";
 import {
   type ActiveDirectionalInput,
   type ActiveSpeedInput,
-  type EntityRuntimeState,
   type InputRuntimeState,
+  type MatchRuntimeState,
   type MovementRuntimeState,
+  type PlayerInputCommand,
+  type PlayerRuntimeState,
   type MovementSpeedState,
   type ProgressRuntimeState,
   type RunLifecycleState,
@@ -34,8 +41,9 @@ import {
   type SpawnRuntimeState,
   type UiSyncState,
   type WallGraceState,
+  type WorldRuntimeState,
 } from "./gameState";
-import { createEntityState, createInputState, createLifecycleState, createMovementState, createProgressState, createSpawnState, createSpeedState, createTimingState, resetTimingState } from "./stateFactory";
+import { createInputState, createLocalPvpPlayers, createMatchState, createSoloPlayers, createSpawnState, createTimingState, createWorldState, resetTimingState } from "./stateFactory";
 import {
   DEFAULT_REVIVE_COUNTDOWN_MS,
   canConfirmRevive,
@@ -93,7 +101,9 @@ import type {
   InputAction,
   InputCommand,
   InputController,
+  PlayerInputOrigin,
   Renderer,
+  ShellView,
   SpeedCueMode,
   SpeedMode,
   StarAttractor,
@@ -130,6 +140,7 @@ const COMPACT_LANDSCAPE_TOP_MARGIN = 170;
 const SHORT_SCREEN_TOP_MARGIN = 112;
 const DEFAULT_HUD_GAP = 12;
 const COMPACT_LANDSCAPE_HUD_GAP = 10;
+const LOCAL_PVP_SEARCH_PARAM = "localPvp";
 
 function clampInteger(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(value)));
@@ -188,6 +199,18 @@ function directionFromAction(action: InputAction): Direction | null {
   }
 }
 
+function shouldStartInLocalPvpMode(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return new URLSearchParams(window.location.search).get(LOCAL_PVP_SEARCH_PARAM) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export class Game {
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: GameUiElements;
@@ -197,15 +220,17 @@ export class Game {
   private readonly unsubscribers: Unsubscribe[] = [];
   private readonly activeDirectionalInputs = new Map<string, ActiveDirectionalInput>();
   private readonly activeSpeedInputs = new Map<string, ActiveSpeedInput>();
+  private readonly bootMode: "solo" | "local-pvp";
+  private shellView: ShellView = "main-menu";
+  private runMode: "solo" | "local-pvp" = "solo";
+  private roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
 
-  private lifecycle: RunLifecycleState = createLifecycleState();
+  private match: MatchRuntimeState = createMatchState();
+  private players: PlayerRuntimeState[] = createSoloPlayers();
   private grid: GridMetrics;
-  private movement: MovementRuntimeState = createMovementState();
   private frameId: number | null = null;
   private timing: TimingRuntimeState = createTimingState();
-  private speedRuntime: SpeedRuntimeState = createSpeedState();
-  private entities: EntityRuntimeState = createEntityState();
-  private progress: ProgressRuntimeState = createProgressState();
+  private world: WorldRuntimeState = createWorldState();
   private spawn: SpawnRuntimeState = createSpawnState();
   private inputState: InputRuntimeState = createInputState();
   private uiSyncState: UiSyncState = createUiSyncState();
@@ -218,11 +243,59 @@ export class Game {
     refreshStarBeasts: () => this.refreshStarBeastsInternal(),
   };
 
+  private get primaryPlayer(): PlayerRuntimeState {
+    return this.players[0] ?? this.createFallbackPrimaryPlayer();
+  }
+
+  private createFallbackPrimaryPlayer(): PlayerRuntimeState {
+    const [player] = createSoloPlayers("ready", 0);
+
+    if (!player) {
+      throw new Error("Failed to create primary player state.");
+    }
+
+    this.players = [player];
+    return player;
+  }
+
+  private get lifecycle(): RunLifecycleState {
+    return this.primaryPlayer.lifecycle;
+  }
+
+  private set lifecycle(value: RunLifecycleState) {
+    this.primaryPlayer.lifecycle = value;
+  }
+
+  private get movement(): MovementRuntimeState {
+    return this.primaryPlayer.movement;
+  }
+
+  private set movement(value: MovementRuntimeState) {
+    this.primaryPlayer.movement = value;
+  }
+
+  private get speedRuntime(): SpeedRuntimeState {
+    return this.primaryPlayer.speed;
+  }
+
+  private set speedRuntime(value: SpeedRuntimeState) {
+    this.primaryPlayer.speed = value;
+  }
+
+  private get progress(): ProgressRuntimeState {
+    return this.primaryPlayer.progress;
+  }
+
+  private set progress(value: ProgressRuntimeState) {
+    this.primaryPlayer.progress = value;
+  }
+
   private get phase(): GamePhase {
-    return this.lifecycle.phase;
+    return this.match.phase;
   }
 
   private set phase(value: GamePhase) {
+    this.match.phase = value;
     this.lifecycle.phase = value;
   }
 
@@ -378,6 +451,22 @@ export class Game {
     this.timing.lastFps = value;
   }
 
+  private get lastSimulationMs(): number {
+    return this.timing.lastSimulationMs;
+  }
+
+  private set lastSimulationMs(value: number) {
+    this.timing.lastSimulationMs = value;
+  }
+
+  private get lastRenderMs(): number {
+    return this.timing.lastRenderMs;
+  }
+
+  private set lastRenderMs(value: number) {
+    this.timing.lastRenderMs = value;
+  }
+
   private get speedCue(): SpeedCueState | null {
     return this.speedRuntime.speedCue;
   }
@@ -403,107 +492,107 @@ export class Game {
   }
 
   private get snake(): GridCell[] {
-    return this.entities.snake;
+    return this.primaryPlayer.snake;
   }
 
   private set snake(value: GridCell[]) {
-    this.entities.snake = value;
+    this.primaryPlayer.snake = value;
   }
 
   private get foods(): GridCell[] {
-    return this.entities.foods;
+    return this.world.foods;
   }
 
   private set foods(value: GridCell[]) {
-    this.entities.foods = value;
+    this.world.foods = value;
   }
 
   private get starAttractors(): StarAttractor[] {
-    return this.entities.starAttractors;
+    return this.world.starAttractors;
   }
 
   private set starAttractors(value: StarAttractor[]) {
-    this.entities.starAttractors = value;
+    this.world.starAttractors = value;
   }
 
   private get starAttractorEffects(): StarAttractorEffect[] {
-    return this.entities.starAttractorEffects;
+    return this.world.starAttractorEffects;
   }
 
   private set starAttractorEffects(value: StarAttractorEffect[]) {
-    this.entities.starAttractorEffects = value;
+    this.world.starAttractorEffects = value;
   }
 
   private get starBeasts(): StarBeast[] {
-    return this.entities.starBeasts;
+    return this.world.starBeasts;
   }
 
   private set starBeasts(value: StarBeast[]) {
-    this.entities.starBeasts = value;
+    this.world.starBeasts = value;
   }
 
   private get starCores(): StarCore[] {
-    return this.entities.starCores;
+    return this.world.starCores;
   }
 
   private set starCores(value: StarCore[]) {
-    this.entities.starCores = value;
+    this.world.starCores = value;
   }
 
   private get starBeastEffects(): StarBeastEffect[] {
-    return this.entities.starBeastEffects;
+    return this.world.starBeastEffects;
   }
 
   private set starBeastEffects(value: StarBeastEffect[]) {
-    this.entities.starBeastEffects = value;
+    this.world.starBeastEffects = value;
   }
 
   private get blackHoles(): BlackHole[] {
-    return this.entities.blackHoles;
+    return this.world.blackHoles;
   }
 
   private set blackHoles(value: BlackHole[]) {
-    this.entities.blackHoles = value;
+    this.world.blackHoles = value;
   }
 
   private get blackHoleAlert(): GameSnapshot["blackHoleAlert"] {
-    return this.entities.blackHoleAlert;
+    return this.world.blackHoleAlert;
   }
 
   private set blackHoleAlert(value: GameSnapshot["blackHoleAlert"]) {
-    this.entities.blackHoleAlert = value;
+    this.world.blackHoleAlert = value;
   }
 
   private get blackHoleGravityState(): BlackHoleGravityState {
-    return this.entities.blackHoleGravityState;
+    return this.world.blackHoleGravityState;
   }
 
   private set blackHoleGravityState(value: BlackHoleGravityState) {
-    this.entities.blackHoleGravityState = value;
+    this.world.blackHoleGravityState = value;
   }
 
   private get blackHoleCue(): GameSnapshot["blackHoleCue"] {
-    return this.entities.blackHoleCue;
+    return this.world.blackHoleCue;
   }
 
   private set blackHoleCue(value: GameSnapshot["blackHoleCue"]) {
-    this.entities.blackHoleCue = value;
+    this.world.blackHoleCue = value;
   }
 
   private get blackHoleRecoveryDirection(): Direction | null {
-    return this.entities.blackHoleRecoveryDirection;
+    return this.world.blackHoleRecoveryDirection;
   }
 
   private set blackHoleRecoveryDirection(value: Direction | null) {
-    this.entities.blackHoleRecoveryDirection = value;
+    this.world.blackHoleRecoveryDirection = value;
   }
 
   private get rewardBurstOrigin(): GridCell | null {
-    return this.entities.rewardBurstOrigin;
+    return this.world.rewardBurstOrigin;
   }
 
   private set rewardBurstOrigin(value: GridCell | null) {
-    this.entities.rewardBurstOrigin = value;
+    this.world.rewardBurstOrigin = value;
   }
 
   private get score(): number {
@@ -544,6 +633,9 @@ export class Game {
     this.renderer = createRenderer(this.canvas);
     this.input = createInputController({ target: window, touchControls: this.ui.touchControls });
     this.audio = createAudioController();
+    this.bootMode = shouldStartInLocalPvpMode() ? "local-pvp" : "solo";
+    this.runMode = this.bootMode;
+    this.shellView = this.bootMode === "local-pvp" ? "active-run" : "main-menu";
     this.highScore = readHighScore();
     this.grid = this.buildGrid(this.renderer.getSize());
     this.resetRun("ready");
@@ -556,6 +648,8 @@ export class Game {
 
     const size = this.renderer.resize();
     this.grid = this.buildGrid(size);
+    this.runMode = this.bootMode;
+    this.shellView = this.bootMode === "local-pvp" ? "active-run" : "main-menu";
     this.resetRun("ready");
     this.bindUi();
     this.unsubscribers.push(this.input.subscribe(this.handleInput));
@@ -594,40 +688,15 @@ export class Game {
     this.lastFrameTime = now;
     this.elapsed += delta;
 
+    const simulationStart = performance.now();
+
     if (this.phase === "playing") {
       this.playElapsed += delta;
-      this.stepAccumulator += delta;
-      this.updateWallGraceState();
 
-      if (this.phase === "playing") {
-        let movementSpeed = this.getMovementSpeedState();
-        this.currentMovementSpeed = movementSpeed;
-        this.updateSpeedCueState(movementSpeed);
-
-        if (!this.wallGrace) {
-          while (this.phase === "playing") {
-            const stepMs = movementSpeed.stepMs;
-
-            if (this.stepAccumulator < stepMs) {
-              break;
-            }
-
-            this.advanceSnake();
-            this.stepAccumulator -= stepMs;
-
-            if (this.phase !== "playing" || this.wallGrace) {
-              break;
-            }
-
-            movementSpeed = this.getMovementSpeedState();
-            this.currentMovementSpeed = movementSpeed;
-            this.updateSpeedCueState(movementSpeed);
-          }
-        }
-
-      if (this.phase === "playing") {
-        runTransientSimulation(this.transientSimulationContext, delta, this.playElapsed);
-      }
+      if (this.match.mode === "local-pvp") {
+        this.advanceLocalPvp(delta);
+      } else {
+        this.advanceSolo(delta);
       }
     } else if (this.phase === "reviving") {
       this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
@@ -636,9 +705,11 @@ export class Game {
       this.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
     }
 
+    this.lastSimulationMs = performance.now() - simulationStart;
     this.renderer.recordFrameTime(frameDelta);
     this.expireSpeedCue();
     this.updateTickerUi();
+    const renderStart = performance.now();
     this.renderer.render({
       now,
       delta,
@@ -647,11 +718,309 @@ export class Game {
       phase: this.phase,
       snapshot: this.createSnapshot(),
     });
+    this.lastRenderMs = performance.now() - renderStart;
 
     this.lastFps = frameDelta > 0 ? Math.round(1000 / frameDelta) : this.lastFps;
     this.syncUi(false);
     this.frameId = window.requestAnimationFrame(this.loop);
   };
+
+  private advanceSolo(delta: number): void {
+    this.stepAccumulator += delta;
+    this.updateWallGraceState();
+
+    if (this.phase !== "playing") {
+      return;
+    }
+
+    let movementSpeed = this.getMovementSpeedState();
+    this.currentMovementSpeed = movementSpeed;
+    this.updateSpeedCueState(movementSpeed);
+
+    if (!this.wallGrace) {
+      while (this.phase === "playing") {
+        const stepMs = movementSpeed.stepMs;
+
+        if (this.stepAccumulator < stepMs) {
+          break;
+        }
+
+        this.advanceSnake();
+        this.stepAccumulator -= stepMs;
+
+        if (this.phase !== "playing" || this.wallGrace) {
+          break;
+        }
+
+        movementSpeed = this.getMovementSpeedState();
+        this.currentMovementSpeed = movementSpeed;
+        this.updateSpeedCueState(movementSpeed);
+      }
+    }
+
+    if (this.phase === "playing") {
+      runTransientSimulation(this.transientSimulationContext, delta, this.playElapsed);
+    }
+  }
+
+  private advanceLocalPvp(delta: number): void {
+    for (const player of this.players) {
+      const movementSpeed = this.getLocalPvpMovementSpeedState(player);
+      player.movement.stepAccumulator += delta;
+      player.speed.currentMovementSpeed = movementSpeed;
+      this.updatePlayerSpeedCueState(player, movementSpeed);
+    }
+
+    let advanced = false;
+    let guard = 0;
+
+    while (this.phase === "playing" && this.hasLocalPvpPlayerReadyToMove() && guard < 8) {
+      this.advanceLocalPvpTick(this.getLocalPvpReadyPlayers());
+      advanced = true;
+      guard += 1;
+    }
+
+    if (advanced && this.phase === "playing") {
+      this.refillFoods();
+      this.updateBlackHoleAlert(this.elapsed / 1000);
+    }
+
+    if (this.phase === "playing") {
+      this.updateLocalPvpWorld();
+    }
+  }
+
+  private getLocalPvpMovementSpeedState(player: PlayerRuntimeState): MovementSpeedState {
+    if (player.id === "p1") {
+      const movementSpeed = this.getMovementSpeedState();
+      this.currentMovementSpeed = movementSpeed;
+      return movementSpeed;
+    }
+
+    return player.movement.isBoosting
+      ? this.getMovementSpeedStateFromMode("boost")
+      : this.getMovementSpeedStateFromMode("base");
+  }
+
+  private hasLocalPvpPlayerReadyToMove(): boolean {
+    return this.players.some((player) =>
+      player.lifecycle.phase === "playing"
+      && player.movement.stepAccumulator >= player.speed.currentMovementSpeed.stepMs
+    );
+  }
+
+  private getLocalPvpReadyPlayers(): Set<PlayerRuntimeState> {
+    return new Set(this.players.filter((player) =>
+      player.lifecycle.phase === "playing"
+      && player.movement.stepAccumulator >= player.speed.currentMovementSpeed.stepMs
+    ));
+  }
+
+  private updateLocalPvpWorld(): void {
+    this.updateFoodWaves(this.playElapsed);
+    this.updateStarBeastEffects(this.playElapsed / 1000);
+    this.updateBlackHoleAlert(this.elapsed / 1000);
+  }
+
+  private advanceLocalPvpTick(readyPlayers: ReadonlySet<PlayerRuntimeState> = new Set(this.players)): void {
+    this.match.tick += 1;
+    this.applyQueuedInputCommandsForTick(this.match.tick);
+
+    const evaluations: MultiplayerSnakeEvaluation[] = [];
+    const intendedDirections = new Map<PlayerRuntimeState, Direction>();
+
+    for (const player of this.players) {
+      const willCommit = readyPlayers.has(player);
+      const intendedDirection = this.resolveLocalPvpDirection(player);
+      const context = this.createPlayerMovementEvaluationContext(player, { includeOpponentBodies: false });
+      const selection = pickAdvanceDirection(context, intendedDirection, [player.movement.direction]);
+      const evaluation = evaluateSnakeAdvance(context, selection.direction);
+
+      if (!evaluation) {
+        this.finishLocalPvpPlayer(player, "unknown");
+        continue;
+      }
+
+      intendedDirections.set(player, selection.direction);
+      evaluations.push({
+        playerId: player.id,
+        direction: selection.direction,
+        evaluation,
+        snake: player.snake,
+        willCommit,
+      });
+    }
+
+    const collisions = resolveMultiplayerSnakeCollisions({
+      grid: this.grid,
+      blackHoles: this.blackHoles,
+      starBeasts: [],
+      currentTime: this.elapsed / 1000,
+    }, evaluations);
+
+    for (const entry of evaluations) {
+      const player = this.players.find((candidate) => candidate.id === entry.playerId);
+      const direction = player ? intendedDirections.get(player) : null;
+      const result = collisions.find((candidate) => candidate.playerId === entry.playerId);
+
+      if (!player || !direction || !result) {
+        continue;
+      }
+
+      if (!entry.willCommit) {
+        continue;
+      }
+
+      if (result.collision.kind !== "none") {
+        this.finishLocalPvpPlayer(player, result.collision.kind === "wall" ? "wall" : result.collision.reason);
+        continue;
+      }
+
+      player.movement.direction = direction;
+      player.movement.stepAccumulator -= player.speed.currentMovementSpeed.stepMs;
+      const moveResult = commitSnakeMovement(
+        {
+          grid: this.grid,
+          snake: player.snake,
+          snakeOccupancy: player.movement.snakeOccupancy,
+          pendingGrowthSegments: player.movement.pendingGrowthSegments,
+        },
+        entry.evaluation,
+      );
+
+      player.movement.pendingGrowthSegments = moveResult.pendingGrowthSegments;
+
+      if (!result.pickupConflict && moveResult.pickup?.kind === "food") {
+        this.foods.splice(moveResult.pickup.index, 1);
+        this.handleLocalPvpCoreCollection(player, moveResult.nextHead);
+      } else if (!result.pickupConflict && moveResult.pickup?.kind === "starCore") {
+        this.starCores.splice(moveResult.pickup.index, 1);
+        this.handleLocalPvpCoreCollection(player, moveResult.nextHead);
+      }
+    }
+
+    this.resolveLocalPvpWinner();
+  }
+
+  private resolveLocalPvpDirection(player: PlayerRuntimeState): Direction {
+    if (player.id === "p1") {
+      return player.movement.directionQueue.shift() ?? player.movement.direction;
+    }
+
+    return this.pickScriptedPvpDirection(player);
+  }
+
+  private applyQueuedInputCommandsForTick(tick: number): void {
+    for (const player of this.players) {
+      this.applyQueuedInputCommandsForPlayer(player, tick);
+    }
+  }
+
+  private applyQueuedInputCommandsForPlayer(player: PlayerRuntimeState, tick: number): void {
+    let lastAppliedSequence = this.inputState.lastAppliedSequenceByPlayer[player.id] ?? 0;
+
+    for (const command of this.inputState.queue) {
+      if (command.playerId !== player.id || command.sequence <= lastAppliedSequence || command.tick > tick) {
+        continue;
+      }
+
+      if (command.kind === "pressed") {
+        const direction = directionFromAction(command.action);
+
+        if (direction) {
+          this.queuePlayerDirection(player, direction);
+        } else if (command.action === "boost") {
+          player.movement.isBoosting = true;
+        }
+      } else if (command.action === "boost") {
+        player.movement.isBoosting = false;
+      }
+
+      lastAppliedSequence = command.sequence;
+    }
+
+    this.inputState.lastAppliedSequenceByPlayer[player.id] = lastAppliedSequence;
+  }
+
+  private pickScriptedPvpDirection(player: PlayerRuntimeState): Direction {
+    const head = player.snake[0];
+
+    if (!head) {
+      return player.movement.direction;
+    }
+
+    const target = this.findNearestFood(head);
+    const horizontal: Direction | null = target && target.column !== head.column
+      ? target.column > head.column ? "right" : "left"
+      : null;
+    const vertical: Direction | null = target && target.row !== head.row
+      ? target.row > head.row ? "down" : "up"
+      : null;
+    const candidates: Direction[] = [
+      ...(horizontal ? [horizontal] : []),
+      ...(vertical ? [vertical] : []),
+      player.movement.direction,
+      "up",
+      "right",
+      "down",
+      "left",
+    ];
+    const context = this.createPlayerMovementEvaluationContext(player, { includeOpponentBodies: true });
+
+    for (const direction of candidates) {
+      if (direction === OPPOSITE_DIRECTIONS[player.movement.direction]) {
+        continue;
+      }
+
+      if (canAdvanceDirection(context, direction)) {
+        return direction;
+      }
+    }
+
+    return player.movement.direction;
+  }
+
+  private findNearestFood(origin: GridCell): GridCell | null {
+    let nearest: GridCell | null = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+
+    for (const food of this.foods) {
+      const distance = Math.abs(food.column - origin.column) + Math.abs(food.row - origin.row);
+
+      if (distance < nearestDistance) {
+        nearest = food;
+        nearestDistance = distance;
+      }
+    }
+
+    return nearest;
+  }
+
+  private handleLocalPvpCoreCollection(player: PlayerRuntimeState, rewardBurstOrigin: GridCell): void {
+    this.rewardBurstOrigin = { ...rewardBurstOrigin };
+    player.progress.coresEaten += 1;
+    player.progress.score += SCORE_PER_CORE;
+    this.refreshBlackHoles();
+    this.updateBlackHoleAlert(this.elapsed / 1000);
+    this.syncUi(true);
+  }
+
+  private finishLocalPvpPlayer(player: PlayerRuntimeState, reason: DeathReason): void {
+    player.lifecycle.deathReason = reason;
+    player.lifecycle.phase = "gameOver";
+  }
+
+  private resolveLocalPvpWinner(): void {
+    const alivePlayers = this.players.filter((player) => player.lifecycle.phase === "playing");
+
+    if (alivePlayers.length > 1 || this.phase === "gameOver") {
+      return;
+    }
+
+    this.match.winnerId = alivePlayers[0]?.id ?? null;
+    this.phase = "gameOver";
+    this.syncUi(true);
+  }
 
   private readonly handleResize = (): void => {
     const size = this.renderer.resize();
@@ -660,7 +1029,7 @@ export class Game {
     if ((this.phase === "playing" || this.phase === "paused" || this.phase === "ready") && !isCurrentPlacementValid({
       grid: this.grid,
       blackHoles: this.blackHoles,
-      snake: this.snake,
+      snake: this.getPlayerOccupiedCells(),
       foods: this.foods,
       starAttractors: this.starAttractors,
       starBeasts: this.starBeasts,
@@ -669,13 +1038,24 @@ export class Game {
     })) {
       this.resetRun(this.phase === "paused" ? "paused" : this.phase);
     } else {
-      this.rebuildSnakeOccupancy();
+      this.rebuildAllPlayerSnakeOccupancy();
     }
 
     this.syncUi(true, size);
   };
 
   private readonly handleInput = (command: InputCommand): void => {
+    if (this.shellView === "main-menu" || this.shellView === "pvp-room") {
+      return;
+    }
+
+    this.enqueueInputCommand(command, "local");
+
+    if (this.match.mode === "local-pvp") {
+      this.handleLocalPvpInput(command);
+      return;
+    }
+
     if (command.action === "boost") {
       this.setBoosting(command.kind === "pressed");
       return;
@@ -708,11 +1088,7 @@ export class Game {
     }
 
     if (command.action === "start") {
-      if (this.phase === "revivePrompt") {
-        this.confirmRevive();
-      } else {
-        this.beginRun();
-      }
+      this.continueRun();
       return;
     }
 
@@ -726,15 +1102,78 @@ export class Game {
     }
   };
 
-  private readonly handleStartPointer = (event: PointerEvent): void => {
-    event.preventDefault();
-
-    if (this.phase === "revivePrompt") {
-      this.confirmRevive();
+  private handleLocalPvpInput(command: InputCommand): void {
+    if (command.kind !== "pressed") {
       return;
     }
 
-    this.beginRun();
+    if (command.action === "start") {
+      this.continueRun();
+      return;
+    }
+
+    if (command.action === "pause") {
+      this.togglePause();
+      return;
+    }
+
+    if (command.action === "restart") {
+      this.restartRun();
+    }
+  }
+
+  private enqueueInputCommand(command: InputCommand, origin: PlayerInputOrigin): void {
+    this.activeInputSequence += 1;
+    const queuedCommand: PlayerInputCommand = {
+      playerId: command.playerId ?? "p1",
+      tick: this.match.tick,
+      action: command.action,
+      kind: command.kind,
+      origin,
+      sequence: this.activeInputSequence,
+    };
+
+    this.inputState.queue.push(queuedCommand);
+
+    if (this.inputState.queue.length > 96) {
+      this.inputState.queue.splice(0, this.inputState.queue.length - 96);
+    }
+  }
+
+  private readonly handleStartPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+
+    this.continueRun();
+  };
+
+  private readonly handlePvePointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.startPveRun();
+  };
+
+  private readonly handlePvpPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.openPvpRoomPanel();
+  };
+
+  private readonly handleContinuePointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.continueRun();
+  };
+
+  private readonly handleMainMenuPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.returnToMainMenu();
+  };
+
+  private readonly handleRoomBackPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.returnToMainMenu();
+  };
+
+  private readonly handleUnavailableRoomActionPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.showRoomUnavailableNotice();
   };
 
   private readonly handlePausePointer = (event: PointerEvent): void => {
@@ -744,12 +1183,69 @@ export class Game {
 
   private bindUi(): void {
     this.ui.startButton.addEventListener("pointerup", this.handleStartPointer);
+    this.ui.pveButton.addEventListener("pointerup", this.handlePvePointer);
+    this.ui.pvpButton.addEventListener("pointerup", this.handlePvpPointer);
+    this.ui.continueButton.addEventListener("pointerup", this.handleContinuePointer);
+    this.ui.mainMenuButton.addEventListener("pointerup", this.handleMainMenuPointer);
+    this.ui.roomBackButton.addEventListener("pointerup", this.handleRoomBackPointer);
+    this.ui.createRoomButton.addEventListener("pointerup", this.handleUnavailableRoomActionPointer);
+    this.ui.joinRoomButton.addEventListener("pointerup", this.handleUnavailableRoomActionPointer);
+    this.ui.readyRoomButton.addEventListener("pointerup", this.handleUnavailableRoomActionPointer);
     this.ui.pauseButton.addEventListener("pointerup", this.handlePausePointer);
   }
 
   private unbindUi(): void {
     this.ui.startButton.removeEventListener("pointerup", this.handleStartPointer);
+    this.ui.pveButton.removeEventListener("pointerup", this.handlePvePointer);
+    this.ui.pvpButton.removeEventListener("pointerup", this.handlePvpPointer);
+    this.ui.continueButton.removeEventListener("pointerup", this.handleContinuePointer);
+    this.ui.mainMenuButton.removeEventListener("pointerup", this.handleMainMenuPointer);
+    this.ui.roomBackButton.removeEventListener("pointerup", this.handleRoomBackPointer);
+    this.ui.createRoomButton.removeEventListener("pointerup", this.handleUnavailableRoomActionPointer);
+    this.ui.joinRoomButton.removeEventListener("pointerup", this.handleUnavailableRoomActionPointer);
+    this.ui.readyRoomButton.removeEventListener("pointerup", this.handleUnavailableRoomActionPointer);
     this.ui.pauseButton.removeEventListener("pointerup", this.handlePausePointer);
+  }
+
+  private startPveRun(): void {
+    this.runMode = "solo";
+    this.shellView = "active-run";
+    this.roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
+    this.beginRun();
+  }
+
+  private openPvpRoomPanel(): void {
+    this.runMode = "solo";
+    this.shellView = "pvp-room";
+    this.roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
+    this.resetMatchRun("solo", "ready");
+  }
+
+  private showRoomUnavailableNotice(): void {
+    this.roomNotice = "暂未接入房间服务：创建、加入和准备会在下一步真实房间 MVP 中实现。";
+    this.syncUi(true);
+  }
+
+  private continueRun(): void {
+    if (this.shellView !== "active-run") {
+      return;
+    }
+
+    if (this.phase === "revivePrompt") {
+      this.confirmRevive();
+      return;
+    }
+
+    if (this.phase === "ready" || this.phase === "gameOver") {
+      this.beginRun();
+    }
+  }
+
+  private returnToMainMenu(): void {
+    this.runMode = "solo";
+    this.shellView = "main-menu";
+    this.roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
+    this.resetMatchRun("solo", "ready");
   }
 
   private beginRun(): void {
@@ -763,6 +1259,10 @@ export class Game {
   }
 
   private restartRun(): void {
+    if (this.shellView !== "active-run") {
+      return;
+    }
+
     this.audio.unlock();
     this.audio.playUiPulse();
     this.resetRun("playing");
@@ -895,14 +1395,18 @@ export class Game {
   }
 
   private updateSpeedCueState(movementSpeed: MovementSpeedState): void {
-    if (movementSpeed.mode !== this.lastMovementSpeedMode) {
-      this.lastMovementSpeedMode = movementSpeed.mode;
+    this.updatePlayerSpeedCueState(this.primaryPlayer, movementSpeed);
+  }
+
+  private updatePlayerSpeedCueState(player: PlayerRuntimeState, movementSpeed: MovementSpeedState): void {
+    if (movementSpeed.mode !== player.speed.lastMovementSpeedMode) {
+      player.speed.lastMovementSpeedMode = movementSpeed.mode;
 
       if (movementSpeed.mode !== "base") {
-        const head = this.snake[0];
+        const head = player.snake[0];
 
         if (head) {
-          this.speedCue = {
+          player.speed.speedCue = {
             mode: movementSpeed.mode,
             anchor: { ...head },
             startedAt: this.elapsed,
@@ -923,54 +1427,60 @@ export class Game {
   }
 
   private queueDirection(direction: Direction): void {
-    if (this.phase !== "playing") {
+    this.queuePlayerDirection(this.primaryPlayer, direction);
+  }
+
+  private queuePlayerDirection(player: PlayerRuntimeState, direction: Direction): void {
+    if (this.phase !== "playing" || player.lifecycle.phase !== "playing") {
       return;
     }
 
-    if (this.wallGrace) {
-      if (direction === OPPOSITE_DIRECTIONS[this.direction]) {
+    if (player.lifecycle.wallGrace) {
+      if (direction === OPPOSITE_DIRECTIONS[player.movement.direction]) {
         return;
       }
 
-      if (!this.canAdvanceDirection(direction)) {
+      if (!this.canPlayerAdvanceDirection(player, direction)) {
         return;
       }
 
-      this.directionQueue = [direction];
+      player.movement.directionQueue = [direction];
       return;
     }
 
-    const lastQueuedDirection = this.directionQueue[this.directionQueue.length - 1] ?? this.direction;
+    const lastQueuedDirection = player.movement.directionQueue[player.movement.directionQueue.length - 1]
+      ?? player.movement.direction;
 
     if (
       direction === lastQueuedDirection ||
       direction === OPPOSITE_DIRECTIONS[lastQueuedDirection] ||
-      this.directionQueue.length >= MAX_DIRECTION_QUEUE_LENGTH
+      player.movement.directionQueue.length >= MAX_DIRECTION_QUEUE_LENGTH
     ) {
       return;
     }
 
-    if (!this.canAdvanceDirection(direction)) {
+    if (!this.canPlayerAdvanceDirection(player, direction)) {
       return;
     }
 
-    this.directionQueue.push(direction);
+    player.movement.directionQueue.push(direction);
   }
 
   private resetRun(phase: GamePhase): void {
-    this.lifecycle = createLifecycleState(phase);
-    this.movement = createMovementState();
+    this.resetMatchRun(this.runMode, phase);
+  }
+
+  private resetMatchRun(mode: "solo" | "local-pvp", phase: GamePhase): void {
+    this.match = createMatchState(mode, phase);
+    this.players = mode === "local-pvp" ? createLocalPvpPlayers(phase) : createSoloPlayers(phase, this.highScore);
     this.timing = resetTimingState(createTimingState());
-    this.speedRuntime = createSpeedState();
-    this.entities = createEntityState();
-    this.progress = createProgressState(this.highScore);
+    this.world = createWorldState();
     this.spawn = createSpawnState();
     this.inputState = createInputState();
     this.activeDirectionalInputs.clear();
     this.activeSpeedInputs.clear();
-    this.entities.snake = this.createStartingSnake();
-    this.lifecycle.birthCell = this.entities.snake[0] ? { ...this.entities.snake[0] } : { column: 0, row: 0 };
-    this.entities.foods = this.createFoods();
+    this.placeStartingPlayers(mode);
+    this.world.foods = this.createFoods();
     this.progress.score = 0;
     this.progress.coresEaten = 0;
     this.spawn.starAttractorNeed = STAR_ATTRACTOR_ENABLED ? rollStarAttractorNeed(this.spawn.starAttractorNeedIndex) : 0;
@@ -979,8 +1489,48 @@ export class Game {
     this.syncUi(true);
   }
 
+  private placeStartingPlayers(mode: "solo" | "local-pvp"): void {
+    if (mode === "local-pvp") {
+      this.placeLocalPvpPlayers();
+      return;
+    }
+
+    this.snake = this.createStartingSnake();
+    this.lifecycle.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
+  }
+
+  private placeLocalPvpPlayers(): void {
+    const firstPlayer = this.players[0];
+    const secondPlayer = this.players[1];
+
+    if (!firstPlayer || !secondPlayer) {
+      return;
+    }
+
+    const firstHead = {
+      column: Math.max(STARTING_LENGTH, Math.floor(this.grid.columns * 0.32)),
+      row: Math.floor(this.grid.rows / 2),
+    };
+    const secondHead = {
+      column: Math.min(this.grid.columns - STARTING_LENGTH - 1, Math.ceil(this.grid.columns * 0.68)),
+      row: Math.floor(this.grid.rows / 2),
+    };
+
+    firstPlayer.snake = this.createStartingSnakeFrom(firstHead, "right");
+    firstPlayer.movement.direction = "right";
+    firstPlayer.lifecycle.birthCell = { ...firstHead };
+    secondPlayer.snake = this.createStartingSnakeFrom(secondHead, "left");
+    secondPlayer.movement.direction = "left";
+    secondPlayer.lifecycle.birthCell = { ...secondHead };
+
+    for (const player of this.players) {
+      this.rebuildPlayerSnakeOccupancy(player);
+    }
+  }
+
   private handlePlayerDeath(reason: DeathReason): void {
     const transition = resolvePlayerDeathTransition(this.lifecycle, reason);
+    this.match.phase = this.lifecycle.phase;
 
     if (transition === "revivePrompt") {
       this.resetTransientRunState();
@@ -1018,7 +1568,9 @@ export class Game {
     }
 
     this.applyRevivePlacement(placement);
-    startReviveCountdown(this.lifecycle, this.elapsed, DEFAULT_REVIVE_COUNTDOWN_MS);
+    if (startReviveCountdown(this.lifecycle, this.elapsed, DEFAULT_REVIVE_COUNTDOWN_MS)) {
+      this.match.phase = this.lifecycle.phase;
+    }
     this.syncUi(true);
   }
 
@@ -1047,12 +1599,14 @@ export class Game {
 
   private updateReviveState(): void {
     if (resolveReviveCountdown(this.lifecycle, this.elapsed) === "completed") {
+      this.match.phase = this.lifecycle.phase;
       this.syncUi(true);
     }
   }
 
   private finishGameOver(reason: DeathReason | null = null): void {
     enterGameOverState(this.lifecycle, reason);
+    this.match.phase = this.lifecycle.phase;
     this.resetTransientRunState();
     this.saveHighScoreIfNeeded();
     this.syncUi(true);
@@ -1070,13 +1624,29 @@ export class Game {
     });
   }
 
+  private getPlayerOccupiedCells(): GridCell[] {
+    return this.players.flatMap((player) => player.snake);
+  }
+
   private createStartingSnake(): GridCell[] {
     const headColumn = Math.floor(this.grid.columns / 2);
     const headRow = Math.floor(this.grid.rows / 2);
 
+    return this.createStartingSnakeFrom({ column: headColumn, row: headRow }, "right");
+  }
+
+  private createStartingSnakeFrom(head: GridCell, direction: Direction): GridCell[] {
+    const offset = direction === "right"
+      ? { column: -1, row: 0 }
+      : direction === "left"
+        ? { column: 1, row: 0 }
+        : direction === "down"
+          ? { column: 0, row: -1 }
+          : { column: 0, row: 1 };
+
     return Array.from({ length: STARTING_LENGTH }, (_, index) => ({
-      column: headColumn - index,
-      row: headRow,
+      column: head.column + offset.column * index,
+      row: head.row + offset.row * index,
     }));
   }
 
@@ -1100,7 +1670,7 @@ export class Game {
     return spawnFoodCell(buildFoodSpawnContext({
       grid: this.grid,
       blackHoles: this.blackHoles,
-      snake: this.snake,
+      snake: this.getPlayerOccupiedCells(),
       foods: this.foods,
       starAttractors: this.starAttractors,
       starBeasts: this.starBeasts,
@@ -1347,7 +1917,7 @@ export class Game {
     refreshBlackHoleSpawnSystem({
       grid: this.grid,
       progress: this.getProgress(),
-      snake: this.snake,
+      snake: this.getPlayerOccupiedCells(),
       foods: this.foods,
       birthCell: this.birthCell,
       currentTime: this.elapsed / 1000,
@@ -1401,7 +1971,7 @@ export class Game {
       context: buildFoodSpawnContext({
         grid: this.grid,
         blackHoles: this.blackHoles,
-        snake: this.snake,
+        snake: this.getPlayerOccupiedCells(),
         foods: this.foods,
         starAttractors: this.starAttractors,
         starBeasts: this.starBeasts,
@@ -1460,29 +2030,43 @@ export class Game {
   }
 
   private rebuildSnakeOccupancy(): void {
+    this.rebuildPlayerSnakeOccupancy(this.primaryPlayer);
+  }
+
+  private rebuildAllPlayerSnakeOccupancy(): void {
+    for (const player of this.players) {
+      this.rebuildPlayerSnakeOccupancy(player);
+    }
+  }
+
+  private rebuildPlayerSnakeOccupancy(player: PlayerRuntimeState): void {
     const cellCount = this.grid.columns * this.grid.rows;
 
-    if (this.snakeOccupancy.length !== cellCount) {
-      this.snakeOccupancy = new Uint8Array(cellCount);
+    if (player.movement.snakeOccupancy.length !== cellCount) {
+      player.movement.snakeOccupancy = new Uint8Array(cellCount);
     } else {
-      this.snakeOccupancy.fill(0);
+      player.movement.snakeOccupancy.fill(0);
     }
 
-    for (const segment of this.snake) {
-      this.adjustSnakeOccupancy(segment, 1);
+    for (const segment of player.snake) {
+      this.adjustPlayerSnakeOccupancy(player, segment, 1);
     }
   }
 
   private adjustSnakeOccupancy(cell: GridCell, delta: number): void {
+    this.adjustPlayerSnakeOccupancy(this.primaryPlayer, cell, delta);
+  }
+
+  private adjustPlayerSnakeOccupancy(player: PlayerRuntimeState, cell: GridCell, delta: number): void {
     const index = this.getSnakeCellIndex(cell);
 
     if (index === null) {
       return;
     }
 
-    const currentValue = this.snakeOccupancy[index] ?? 0;
+    const currentValue = player.movement.snakeOccupancy[index] ?? 0;
     const nextValue = currentValue + delta;
-    this.snakeOccupancy[index] = Math.max(0, Math.min(255, nextValue));
+    player.movement.snakeOccupancy[index] = Math.max(0, Math.min(255, nextValue));
   }
 
   private getSnakeCellIndex(cell: GridCell): number | null {
@@ -1494,20 +2078,37 @@ export class Game {
   }
 
   private createSnakeMovementEvaluationContext(): SnakeMovementEvaluationContext {
+    return this.createPlayerMovementEvaluationContext(this.primaryPlayer);
+  }
+
+  private createPlayerMovementEvaluationContext(
+    player: PlayerRuntimeState,
+    options: { includeOpponentBodies?: boolean } = {},
+  ): SnakeMovementEvaluationContext {
+    const includeOpponentBodies = options.includeOpponentBodies ?? this.match.mode !== "local-pvp";
+    const otherPlayerCells = this.players
+      .filter((candidate) => candidate.id !== player.id && candidate.lifecycle.phase === "playing")
+      .flatMap((candidate) => candidate.snake);
+
     return {
       grid: this.grid,
-      snake: this.snake,
+      snake: player.snake,
       foods: this.foods,
       starCores: this.starCores,
       starAttractors: this.starAttractors,
-      snakeOccupancy: this.snakeOccupancy,
-      pendingGrowthSegments: this.pendingGrowthSegments,
+      snakeOccupancy: player.movement.snakeOccupancy,
+      pendingGrowthSegments: player.movement.pendingGrowthSegments,
       includeStarAttractors: STAR_ATTRACTOR_ENABLED,
+      extraBlockedCells: includeOpponentBodies ? otherPlayerCells : undefined,
     };
   }
 
   private canAdvanceDirection(direction: Direction): boolean {
-    return canAdvanceDirection(this.createSnakeMovementEvaluationContext(), direction);
+    return this.canPlayerAdvanceDirection(this.primaryPlayer, direction);
+  }
+
+  private canPlayerAdvanceDirection(player: PlayerRuntimeState, direction: Direction): boolean {
+    return canAdvanceDirection(this.createPlayerMovementEvaluationContext(player), direction);
   }
 
   private pickAdvanceDirection(primary: Direction, fallbacks: readonly Direction[] = []): { direction: Direction; primaryBlocked: boolean } {
@@ -1595,8 +2196,26 @@ export class Game {
   }
 
   private updateBlackHoleAlert(currentTime: number): void {
-    const head = this.snake[0];
-    this.blackHoleAlert = head ? resolveBlackHoleAlert(head, this.blackHoles, currentTime) : null;
+    let nearestAlert: GameSnapshot["blackHoleAlert"] = null;
+
+    for (const player of this.players) {
+      if (player.lifecycle.phase !== "playing") {
+        continue;
+      }
+
+      const head = player.snake[0];
+      const alert = head ? resolveBlackHoleAlert(head, this.blackHoles, currentTime) : null;
+
+      if (!alert) {
+        continue;
+      }
+
+      if (!nearestAlert || alert.distance < nearestAlert.distance) {
+        nearestAlert = alert;
+      }
+    }
+
+    this.blackHoleAlert = nearestAlert;
   }
 
   private isOutOfBounds(cell: GridCell): boolean {
@@ -1643,6 +2262,12 @@ export class Game {
   private createSnapshot(): GameSnapshot {
     return buildGameSnapshot({
       phase: this.phase,
+      match: {
+        mode: this.match.mode,
+        phase: this.match.phase,
+        tick: this.match.tick,
+        winnerId: this.match.winnerId,
+      },
       grid: this.grid,
       snake: this.snake,
       foods: this.foods,
@@ -1668,6 +2293,24 @@ export class Game {
       elapsed: this.elapsed,
       wallGrace: this.wallGrace,
       includeStarAttractor: STAR_ATTRACTOR_ENABLED,
+      players: this.players.map((player) => ({
+        id: player.id,
+        label: player.label,
+        inputOrigin: player.inputOrigin,
+        snake: player.snake,
+        direction: player.movement.direction,
+        score: player.progress.score,
+        highScore: player.progress.highScore,
+        livesRemaining: player.lifecycle.livesRemaining,
+        deathReason: player.lifecycle.deathReason,
+        speedMode: player.speed.currentMovementSpeed.mode,
+        speedMultiplier: player.speed.currentMovementSpeed.multiplier,
+        speedCue: player.speed.speedCue,
+        reviving: player.lifecycle.reviving,
+        reviveEndsAt: player.lifecycle.reviveEndsAt,
+        elapsed: this.elapsed,
+        wallGrace: player.lifecycle.wallGrace,
+      })),
     });
   }
 
@@ -1676,11 +2319,24 @@ export class Game {
   }
 
   private getProgress(): GameProgress {
+    if (this.match.mode === "local-pvp") {
+      return this.getMatchProgress();
+    }
+
     return {
       snakeLength: this.snake.length,
       coresEaten: this.coresEaten,
       score: this.score,
       elapsedTime: this.playElapsed / 1000
+    };
+  }
+
+  private getMatchProgress(): GameProgress {
+    return {
+      snakeLength: Math.max(...this.players.map((player) => player.snake.length), 0),
+      coresEaten: this.players.reduce((total, player) => total + player.progress.coresEaten, 0),
+      score: this.players.reduce((total, player) => total + player.progress.score, 0),
+      elapsedTime: this.playElapsed / 1000,
     };
   }
 
@@ -1694,16 +2350,35 @@ export class Game {
     const progress = this.getProgress();
     const model = buildUiSyncModel({
       phase: this.phase,
+      shellView: this.shellView,
       grid: this.grid,
       progress,
       livesRemaining: this.livesRemaining,
       lastFps: this.lastFps,
+      lastSimulationMs: this.lastSimulationMs,
+      lastRenderMs: this.lastRenderMs,
       size,
       deathReason: this.deathReason,
       reviving: this.reviving,
       reviveEndsAt: this.reviveEndsAt,
       elapsed: this.elapsed,
       lifeHeartCount: this.ui.lifeHearts.length,
+      roomNotice: this.roomNotice,
+      match: {
+        mode: this.match.mode,
+        phase: this.match.phase,
+        tick: this.match.tick,
+        winnerId: this.match.winnerId,
+      },
+      players: this.players.map((player) => ({
+        id: player.id,
+        label: player.label,
+        inputOrigin: player.inputOrigin,
+        snakeLength: player.snake.length,
+        score: player.progress.score,
+        livesRemaining: player.lifecycle.livesRemaining,
+        deathReason: player.lifecycle.deathReason,
+      })),
     });
 
     applyUiSyncModel(this.ui, this.uiSyncState, model);

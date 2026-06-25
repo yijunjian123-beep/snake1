@@ -1,6 +1,6 @@
 import { DIRECTION_DELTAS } from "./direction";
 import type { SnakeAdvanceEvaluation } from "./gameState";
-import { cellsMatch, isInsideGrid } from "./gridMath";
+import { cellIndex, cellsMatch, getCellIndex, isInsideGrid } from "./gridMath";
 import type { Direction, GridCell, GridMetrics, StarAttractor, StarCore } from "./types";
 
 export interface SnakeMovementEvaluationContext {
@@ -12,6 +12,7 @@ export interface SnakeMovementEvaluationContext {
   snakeOccupancy: Uint8Array;
   pendingGrowthSegments: number;
   includeStarAttractors: boolean;
+  extraBlockedCells?: readonly GridCell[];
 }
 
 export interface SnakeAdvanceDirectionSelection {
@@ -60,7 +61,10 @@ export function evaluateSnakeAdvance(
   const growthBeforeMove = context.pendingGrowthSegments;
   const shouldKeepTail = ateFoodIndex !== -1 || ateStarCoreIndex !== -1 || growthBeforeMove > 0;
   const isOutOfBounds = !isInsideGrid(nextHead, context.grid);
-  const collidesWithSelf = !isOutOfBounds && collidesWithSnakeBody(context, nextHead, shouldKeepTail);
+  const collidesWithSelf = !isOutOfBounds && (
+    collidesWithSnakeBody(context, nextHead, shouldKeepTail)
+    || collidesWithExtraBlockedCell(context, nextHead)
+  );
 
   return {
     nextHead,
@@ -73,6 +77,10 @@ export function evaluateSnakeAdvance(
     collidesWithSelf,
     canAdvance: !isOutOfBounds && !collidesWithSelf,
   };
+}
+
+function collidesWithExtraBlockedCell(context: SnakeMovementEvaluationContext, cell: GridCell): boolean {
+  return context.extraBlockedCells?.some((blockedCell) => cellsMatch(blockedCell, cell)) ?? false;
 }
 
 export function commitSnakeMovement(
@@ -168,7 +176,7 @@ function resolveSnakePickup(
 }
 
 function adjustSnakeOccupancy(state: SnakeMovementCommitState, cell: GridCell, delta: number): void {
-  const index = cell.row * state.grid.columns + cell.column;
+  const index = cellIndex(cell, state.grid);
   const nextValue = (state.snakeOccupancy[index] ?? 0) + delta;
 
   state.snakeOccupancy[index] = Math.max(0, nextValue);
@@ -203,9 +211,5 @@ function collidesWithSnakeBody(
 }
 
 function getSnakeCellIndex(grid: GridMetrics, cell: GridCell): number | null {
-  if (!isInsideGrid(cell, grid)) {
-    return null;
-  }
-
-  return cell.row * grid.columns + cell.column;
+  return getCellIndex(cell, grid);
 }

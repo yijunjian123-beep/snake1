@@ -189,16 +189,18 @@ class FakeDocument {
 
 class FakeWindow extends EventTarget {
   public readonly localStorage = new FakeStorage();
+  public readonly location: Location;
   public innerWidth: number;
   public innerHeight: number;
   public devicePixelRatio: number;
   public document: FakeDocument | null = null;
 
-  public constructor(width: number, height: number, dpr: number) {
+  public constructor(width: number, height: number, dpr: number, search = "") {
     super();
     this.innerWidth = width;
     this.innerHeight = height;
     this.devicePixelRatio = dpr;
+    this.location = new URL(`https://example.test/${search}`) as unknown as Location;
   }
 
   public matchMedia(query: string): MediaQueryList {
@@ -239,6 +241,19 @@ export function createGameUi(): GameUiElements {
   const panelPrimaryValue = new FakeElement();
   const panelSecondaryLabel = new FakeElement();
   const panelMetaLabel = new FakeElement();
+  const entryActions = new FakeElement();
+  const pveButton = new FakeElement() as unknown as HTMLButtonElement;
+  const pvpButton = new FakeElement() as unknown as HTMLButtonElement;
+  const pvpRoomPanel = new FakeElement();
+  const roomCodeInput = new FakeElement() as unknown as HTMLInputElement;
+  const createRoomButton = new FakeElement() as unknown as HTMLButtonElement;
+  const joinRoomButton = new FakeElement() as unknown as HTMLButtonElement;
+  const readyRoomButton = new FakeElement() as unknown as HTMLButtonElement;
+  const roomBackButton = new FakeElement() as unknown as HTMLButtonElement;
+  const roomStatusLabel = new FakeElement();
+  const settlementActions = new FakeElement();
+  const continueButton = new FakeElement() as unknown as HTMLButtonElement;
+  const mainMenuButton = new FakeElement() as unknown as HTMLButtonElement;
   const lifeHearts = [new FakeElement(), new FakeElement(), new FakeElement()];
   const lengthLabel = new FakeElement();
   const unlockTitleLabel = new FakeElement();
@@ -264,6 +279,19 @@ export function createGameUi(): GameUiElements {
     panelPrimaryValue: panelPrimaryValue as unknown as HTMLElement,
     panelSecondaryLabel: panelSecondaryLabel as unknown as HTMLElement,
     panelMetaLabel: panelMetaLabel as unknown as HTMLElement,
+    entryActions: entryActions as unknown as HTMLElement,
+    pveButton,
+    pvpButton,
+    pvpRoomPanel: pvpRoomPanel as unknown as HTMLElement,
+    roomCodeInput,
+    createRoomButton,
+    joinRoomButton,
+    readyRoomButton,
+    roomBackButton,
+    roomStatusLabel: roomStatusLabel as unknown as HTMLElement,
+    settlementActions: settlementActions as unknown as HTMLElement,
+    continueButton,
+    mainMenuButton,
     lifeHearts: lifeHearts as unknown as readonly HTMLElement[],
     lengthLabel: lengthLabel as unknown as HTMLElement,
     unlockTitleLabel: unlockTitleLabel as unknown as HTMLElement,
@@ -357,8 +385,8 @@ function installDocument(fakeDocument: FakeDocument): () => void {
   };
 }
 
-export function createGameHarness(): GameHarness {
-  const windowLike = new FakeWindow(960, 540, 1);
+export function createGameHarness(options: { search?: string } = {}): GameHarness {
+  const windowLike = new FakeWindow(960, 540, 1, options.search ?? "");
   const documentLike = new FakeDocument();
   const restoreWindow = installWindow(windowLike);
   const restoreDocument = installDocument(documentLike);

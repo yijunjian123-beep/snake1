@@ -69,6 +69,35 @@
           <h1 id="panel-primary-value">NEON SERPENT</h1>
           <p id="panel-secondary-label" class="panel-subtitle">霓虹吞星</p>
           <p id="panel-meta-label" class="panel-meta">长按方向键加速·长按Shift减速</p>
+          <div id="entry-actions" class="entry-actions" hidden>
+            <button id="pve-button" class="mode-card mode-card--pve" type="button" aria-label="进入 PVE 单人冒险">
+              <span class="mode-card__eyebrow">PVE</span>
+              <strong>单人冒险</strong>
+              <span>进入原来的单人玩法</span>
+            </button>
+            <button id="pvp-button" class="mode-card mode-card--pvp" type="button" aria-label="进入 PVP 双蛇竞技">
+              <span class="mode-card__eyebrow">PVP</span>
+              <strong>双蛇竞技</strong>
+              <span>进入房间面板</span>
+            </button>
+          </div>
+          <div id="pvp-room-panel" class="pvp-room-panel" hidden>
+            <div class="room-actions">
+              <button id="create-room-button" class="secondary-action" type="button">创建房间</button>
+              <label class="room-code-field">
+                <span>房间号</span>
+                <input id="room-code-input" type="text" inputmode="numeric" placeholder="等待接入" autocomplete="off" />
+              </label>
+              <button id="join-room-button" class="secondary-action" type="button">加入房间</button>
+              <button id="ready-room-button" class="secondary-action secondary-action--accent" type="button">准备</button>
+            </div>
+            <p id="room-status-label" class="room-status">联机房间服务将在下一步接入。</p>
+            <button id="room-back-button" class="text-action" type="button">返回主界面</button>
+          </div>
+          <div id="settlement-actions" class="settlement-actions" hidden>
+            <button id="continue-button" class="primary-action" type="button">继续游戏</button>
+            <button id="main-menu-button" class="secondary-action" type="button">回到主界面</button>
+          </div>
           <button id="start-button" class="primary-action" type="button">开始游戏</button>
         </section>
 

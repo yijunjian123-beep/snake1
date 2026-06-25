@@ -1,5 +1,5 @@
 import { type RenderQualityState } from "./renderQuality";
-import type { GameSnapshot, GridCell, GridMetrics } from "./types";
+import type { GameSnapshot, GridCell, GridMetrics, PlayerId, PlayerSnapshot } from "./types";
 
 export interface Particle {
   x: number;
@@ -14,6 +14,7 @@ export interface Particle {
 }
 
 export interface TrailSample {
+  playerId: PlayerId;
   cells: GridCell[];
   life: number;
   maxLife: number;
@@ -50,7 +51,7 @@ export interface RenderState {
   blackHoleAlertAlpha: number;
   previousScore: number | null;
   previousPhase: GameSnapshot["phase"] | null;
-  previousSnakeHeadKey: string | null;
+  previousSnakeHeadKeys: Record<PlayerId, string | null>;
   previousWallGraceKey: string | null;
   previousStarAttractorEffectCount: number | null;
   previousFoods: GridCell[];
@@ -71,6 +72,10 @@ function cellsMatch(left: GridCell, right: GridCell): boolean {
   return left.column === right.column && left.row === right.row;
 }
 
+function getTotalPlayerScore(snapshot: GameSnapshot): number {
+  return snapshot.players.reduce((total, player) => total + player.score, 0);
+}
+
 export function createRenderState(): RenderState {
   return {
     particles: [],
@@ -80,7 +85,10 @@ export function createRenderState(): RenderState {
     blackHoleAlertAlpha: 0,
     previousScore: null,
     previousPhase: null,
-    previousSnakeHeadKey: null,
+    previousSnakeHeadKeys: {
+      p1: null,
+      p2: null,
+    },
     previousWallGraceKey: null,
     previousStarAttractorEffectCount: null,
     previousFoods: [],
@@ -168,6 +176,36 @@ function createTrailCells(snake: readonly GridCell[]): GridCell[] {
   }
 
   return cells;
+}
+
+function pushTrailSample(
+  state: RenderState,
+  player: PlayerSnapshot,
+  trailCap: number,
+): void {
+  if (trailCap <= 0) {
+    return;
+  }
+
+  if (state.trails.length >= trailCap) {
+    const recycledTrail = state.trails.shift();
+
+    if (recycledTrail) {
+      recycledTrail.playerId = player.id;
+      syncGridCellArray(recycledTrail.cells, player.snake);
+      recycledTrail.life = TRAIL_LIFE_SECONDS;
+      recycledTrail.maxLife = TRAIL_LIFE_SECONDS;
+      state.trails.push(recycledTrail);
+      return;
+    }
+  }
+
+  state.trails.push({
+    playerId: player.id,
+    cells: createTrailCells(player.snake),
+    life: TRAIL_LIFE_SECONDS,
+    maxLife: TRAIL_LIFE_SECONDS,
+  });
 }
 
 function triggerShake(
@@ -329,8 +367,8 @@ export function updateRenderState(
   const dt = Math.min(delta / 1000, 0.05);
   const dragExponent = delta / 16.67;
   const head = snapshot.snake[0] ?? null;
-  const headKey = cellKey(head);
-  const scoreIncreased = state.previousScore !== null && snapshot.score > state.previousScore;
+  const totalPlayerScore = getTotalPlayerScore(snapshot);
+  const scoreIncreased = state.previousScore !== null && totalPlayerScore > state.previousScore;
   const starAttractorEffectCount = snapshot.starAttractorEffects.length;
   const previousStarAttractorEffectCount = state.previousStarAttractorEffectCount ?? 0;
   const enteredGameOver = snapshot.phase === "gameOver" && state.previousPhase !== "gameOver";
@@ -423,34 +461,29 @@ export function updateRenderState(
   }
 
   if (
-    snapshot.phase === "playing" &&
-    headKey !== null &&
-    state.previousSnakeHeadKey !== null &&
-    headKey !== state.previousSnakeHeadKey
+    snapshot.phase === "playing"
   ) {
     const trailCap = quality.trailCap;
 
-    if (state.trails.length >= trailCap && trailCap > 0) {
-      const recycledTrail = state.trails.shift();
+    for (const player of snapshot.players) {
+      const playerHeadKey = cellKey(player.snake[0]);
+      const previousHeadKey = state.previousSnakeHeadKeys[player.id] ?? null;
 
-      if (recycledTrail) {
-        syncGridCellArray(recycledTrail.cells, snapshot.snake);
-        recycledTrail.life = TRAIL_LIFE_SECONDS;
-        recycledTrail.maxLife = TRAIL_LIFE_SECONDS;
-        state.trails.push(recycledTrail);
+      if (playerHeadKey !== null && previousHeadKey !== null && playerHeadKey !== previousHeadKey) {
+        pushTrailSample(state, player, trailCap);
       }
-    } else if (trailCap > 0) {
-      state.trails.push({
-        cells: createTrailCells(snapshot.snake),
-        life: TRAIL_LIFE_SECONDS,
-        maxLife: TRAIL_LIFE_SECONDS,
-      });
+
+      state.previousSnakeHeadKeys[player.id] = playerHeadKey;
     }
   }
 
-  state.previousScore = snapshot.score;
+  state.previousScore = totalPlayerScore;
   state.previousPhase = snapshot.phase;
-  state.previousSnakeHeadKey = headKey;
+  if (snapshot.phase !== "playing") {
+    for (const player of snapshot.players) {
+      state.previousSnakeHeadKeys[player.id] = cellKey(player.snake[0]);
+    }
+  }
   state.previousWallGraceKey = wallGraceKey;
   state.previousStarAttractorEffectCount = starAttractorEffectCount;
 

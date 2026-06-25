@@ -20,6 +20,14 @@ export type SpeedMode = "base" | "accelerate" | "brake" | "boost";
 
 export type SpeedCueMode = Exclude<SpeedMode, "base">;
 
+export type PlayerId = "p1" | "p2";
+
+export type MatchMode = "solo" | "local-pvp";
+
+export type ShellView = "main-menu" | "pvp-room" | "active-run";
+
+export type PlayerInputOrigin = "local" | "remote" | "scripted";
+
 export type InputAction =
   | "start"
   | "pause"
@@ -157,8 +165,34 @@ export interface WallGraceSnapshot {
   expiresAt: number;
 }
 
+export interface MatchSnapshot {
+  mode: MatchMode;
+  phase: GamePhase;
+  tick: number;
+  winnerId: PlayerId | null;
+}
+
+export interface PlayerSnapshot {
+  id: PlayerId;
+  label: string;
+  inputOrigin: PlayerInputOrigin;
+  snake: readonly GridCell[];
+  direction: Direction;
+  score: number;
+  highScore: number;
+  livesRemaining: number;
+  deathReason: DeathReason | null;
+  speedMode: SpeedMode;
+  speedMultiplier: number;
+  speedCue: SpeedCue | null;
+  wallGrace: WallGraceSnapshot | null;
+  reviveCountdownSeconds: number;
+}
+
 export interface GameSnapshot {
   phase: GamePhase;
+  match: MatchSnapshot;
+  players: readonly PlayerSnapshot[];
   grid: GridMetrics;
   snake: readonly GridCell[];
   foods: readonly GridCell[];
@@ -196,6 +230,7 @@ export interface InputCommand {
   action: InputAction;
   kind: InputEventKind;
   source: InputSource;
+  playerId?: PlayerId;
 }
 
 export type InputListener = (command: InputCommand) => void;
@@ -236,6 +271,19 @@ export interface GameUiElements {
   panelPrimaryValue: HTMLElement;
   panelSecondaryLabel: HTMLElement;
   panelMetaLabel: HTMLElement;
+  entryActions: HTMLElement;
+  pveButton: HTMLButtonElement;
+  pvpButton: HTMLButtonElement;
+  pvpRoomPanel: HTMLElement;
+  roomCodeInput: HTMLInputElement;
+  createRoomButton: HTMLButtonElement;
+  joinRoomButton: HTMLButtonElement;
+  readyRoomButton: HTMLButtonElement;
+  roomBackButton: HTMLButtonElement;
+  roomStatusLabel: HTMLElement;
+  settlementActions: HTMLElement;
+  continueButton: HTMLButtonElement;
+  mainMenuButton: HTMLButtonElement;
   lifeHearts: readonly HTMLElement[];
   lengthLabel: HTMLElement;
   unlockTitleLabel: HTMLElement;

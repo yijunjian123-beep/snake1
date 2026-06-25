@@ -193,6 +193,28 @@ export function drawBoard(
 export function createStaticSceneSnapshot(grid: GridMetrics): GameSnapshot {
   return {
     phase: "ready",
+    match: {
+      mode: "solo",
+      phase: "ready",
+      tick: 0,
+      winnerId: null,
+    },
+    players: [{
+      id: "p1",
+      label: "P1",
+      inputOrigin: "local",
+      snake: [],
+      direction: "right",
+      score: 0,
+      highScore: 0,
+      livesRemaining: 3,
+      deathReason: null,
+      speedMode: "base",
+      speedMultiplier: 1,
+      speedCue: null,
+      wallGrace: null,
+      reviveCountdownSeconds: 0,
+    }],
     grid,
     snake: [],
     foods: [],

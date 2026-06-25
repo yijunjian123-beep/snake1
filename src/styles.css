@@ -352,7 +352,10 @@ button {
 }
 
 .icon-button,
-.primary-action {
+.primary-action,
+.secondary-action,
+.text-action,
+.mode-card {
   pointer-events: auto;
   border: 1px solid rgba(143, 251, 255, 0.36);
   border-radius: 8px;
@@ -407,10 +410,46 @@ button {
     inset 0 1px 0 rgba(255, 255, 255, 0.42);
 }
 
+.secondary-action {
+  position: relative;
+  min-height: 42px;
+  padding: 0 16px;
+  color: var(--text);
+  font-weight: 800;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
+    rgba(255, 43, 214, 0.1);
+  box-shadow:
+    0 0 18px rgba(255, 43, 214, 0.2),
+    inset 0 0 14px rgba(0, 245, 255, 0.08);
+}
+
+.secondary-action--accent {
+  border-color: rgba(219, 255, 82, 0.34);
+  color: #061015;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.05)),
+    linear-gradient(135deg, rgba(219, 255, 82, 0.78), rgba(0, 245, 255, 0.58));
+}
+
 .primary-action:disabled {
   opacity: 0.56;
   cursor: default;
   filter: saturate(0.85);
+}
+
+.secondary-action:disabled {
+  opacity: 0.54;
+  cursor: default;
+}
+
+.text-action {
+  min-height: 36px;
+  padding: 0 12px;
+  color: rgba(247, 251, 255, 0.78);
+  font-weight: 800;
+  background: transparent;
+  border-color: rgba(143, 251, 255, 0.18);
 }
 
 .primary-action::before {
@@ -427,7 +466,10 @@ button {
 }
 
 .icon-button:hover,
-.primary-action:hover {
+.primary-action:hover,
+.secondary-action:hover,
+.text-action:hover,
+.mode-card:hover {
   filter: brightness(1.12);
 }
 
@@ -580,6 +622,120 @@ button {
   line-height: 1.22;
   text-align: center;
   text-shadow: 0 0 14px rgba(255, 43, 214, 0.14);
+}
+
+.entry-actions {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 390px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.entry-actions[hidden],
+.pvp-room-panel[hidden],
+.settlement-actions[hidden],
+.primary-action[hidden] {
+  display: none;
+}
+
+.mode-card {
+  min-height: 126px;
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  padding: 15px 14px;
+  color: var(--text);
+  text-align: left;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.02)),
+    rgba(7, 10, 22, 0.56);
+  box-shadow:
+    inset 0 0 18px rgba(0, 245, 255, 0.08),
+    0 0 22px rgba(0, 0, 0, 0.22);
+}
+
+.mode-card--pve {
+  border-color: rgba(219, 255, 82, 0.36);
+}
+
+.mode-card--pvp {
+  border-color: rgba(255, 43, 214, 0.4);
+}
+
+.mode-card__eyebrow {
+  color: var(--lime);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.mode-card strong {
+  font-size: 1.22rem;
+  line-height: 1.05;
+}
+
+.mode-card span:last-child {
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.25;
+}
+
+.pvp-room-panel {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 390px);
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.room-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.room-code-field {
+  grid-column: span 2;
+  display: grid;
+  gap: 5px;
+  text-align: left;
+}
+
+.room-code-field span {
+  color: rgba(247, 251, 255, 0.72);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.room-code-field input {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(143, 251, 255, 0.26);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(3, 5, 14, 0.48);
+  outline: none;
+}
+
+.room-status {
+  margin: 0;
+  color: rgba(247, 251, 255, 0.76);
+  font-size: 0.76rem;
+  line-height: 1.32;
+}
+
+.settlement-actions {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: min(100%, 360px);
+  margin-top: 8px;
 }
 
 .operation-guide {
@@ -1047,7 +1203,7 @@ button {
   }
 }
 
-@media (hover: none) and (pointer: coarse) and (orientation: landscape) and (max-height: 520px) {
+@media (orientation: landscape) and (max-height: 520px) {
   .hud-strip {
     top: max(8px, env(safe-area-inset-top));
     width: min(calc(100vw - 16px), 720px);
@@ -1135,6 +1291,85 @@ button {
 
   .start-panel h1 {
     font-size: 2.1rem;
+  }
+
+  .panel-meta {
+    margin-bottom: 6px;
+    font-size: 0.78rem;
+  }
+
+  .entry-actions,
+  .pvp-room-panel {
+    width: min(100%, 326px);
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .mode-card {
+    min-height: 92px;
+    gap: 5px;
+    padding: 11px 10px;
+  }
+
+  .mode-card strong {
+    font-size: 1rem;
+  }
+
+  .mode-card span:last-child,
+  .room-status {
+    font-size: 0.68rem;
+    line-height: 1.2;
+  }
+
+  .room-actions {
+    gap: 7px;
+  }
+
+  .secondary-action,
+  .room-code-field input {
+    min-height: 36px;
+    padding-inline: 10px;
+  }
+
+  .text-action {
+    min-height: 32px;
+  }
+
+  .settlement-actions {
+    width: min(100%, 318px);
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .start-panel {
+    gap: 5px;
+    min-height: 0;
+    padding-block: 14px;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .start-orbit {
+    display: none;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .panel-kicker {
+    font-size: 0.62rem;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .panel-primary-label {
+    font-size: 0.64rem;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .start-panel h1 {
+    font-size: 1.62rem;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .pvp-room-panel {
+    gap: 7px;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .room-status {
+    max-height: 32px;
+    overflow: hidden;
   }
 
   .operation-guide {
