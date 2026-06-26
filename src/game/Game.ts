@@ -1,4 +1,5 @@
 ﻿import { createAudioController, type AudioController } from "./audio";
+import { resolveBuildVersion } from "../buildInfo.js";
 import {
   getBlackHoleFoodAvoidRadiusCells,
   resolveBlackHoleAlert,
@@ -43,7 +44,7 @@ import {
   type WallGraceState,
   type WorldRuntimeState,
 } from "./gameState";
-import { createInputState, createLocalPvpPlayers, createMatchState, createSoloPlayers, createSpawnState, createTimingState, createWorldState, resetTimingState } from "./stateFactory";
+import { createInputState, createLocalPvpPlayers, createMatchState, createOnlinePvpPlayers, createSoloPlayers, createSpawnState, createTimingState, createWorldState, resetTimingState } from "./stateFactory";
 import {
   DEFAULT_REVIVE_COUNTDOWN_MS,
   canConfirmRevive,
@@ -73,8 +74,10 @@ import {
   buildTickerUiModel,
   buildUiSyncModel,
   createUiSyncState,
+  type PlayerSnapshotInput,
 } from "./viewModel";
 import { runTransientSimulation, type TransientSimulationContext } from "./simulationPipeline";
+import { createPrng, createSeed } from "./random";
 import {
   canAdvanceDirection,
   commitSnakeMovement,
@@ -103,6 +106,7 @@ import type {
   InputController,
   PlayerInputOrigin,
   Renderer,
+  MatchMode,
   ShellView,
   SpeedCueMode,
   SpeedMode,
@@ -113,13 +117,49 @@ import type {
   StarCore,
   DeathReason,
   Unsubscribe,
+  PlayerId,
 } from "./types";
+import { createPvpConnectionController, resolvePvpWebSocketUrl, type PvpConnectionController, type PvpConnectionControllerOptions } from "../pvp/net/usePvpConnection.js";
+import type { PvpConnectionState } from "../pvp/net/state.js";
+import type { ServerGameOverMessage, ServerPeerInputMessage, ServerSnapshotMessage } from "../pvp/net/protocol.js";
+import {
+  advancePvpTick,
+  createPvpBoardGrid,
+  createPvpRuntime,
+  createPvpSnapshot,
+  recordPvpInput,
+  type PvpGameSnapshot,
+  type PvpRuntimeState,
+} from "../pvp/shared/pvpGame.js";
 
 const STAR_ATTRACTOR_ENABLED = DEFAULT_UNLOCK_CONFIG.featureFlags.starAttractor;
 
 interface GameOptions {
   canvas: HTMLCanvasElement;
   ui: GameUiElements;
+  pvpConnectionOptions?: Partial<PvpConnectionControllerOptions>;
+}
+
+interface OnlinePvpSessionState {
+  readonly localPlayerId: PlayerId;
+  readonly inputDelayTicks: number;
+  readonly seed: number;
+  readonly startTick: number;
+  readonly tickRate: number;
+  runtime: PvpRuntimeState;
+  latestSnapshot: PvpGameSnapshot | null;
+  lastSnapshotHash: string | null;
+  lastSnapshotTick: number;
+  lastServerGameOver: ServerGameOverMessage | null;
+  syncNotice: string | null;
+  tickAccumulatorMs: number;
+  nextSequence: number;
+}
+
+interface ResetMatchRunOptions {
+  readonly seed?: number;
+  readonly startTick?: number;
+  readonly localPlayerId?: PlayerId;
 }
 
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
@@ -184,6 +224,24 @@ function createGrid(size: CanvasSize, topMargin: number): GridMetrics {
   };
 }
 
+function createFixedPvpGrid(size: CanvasSize, topMargin: number): GridMetrics {
+  const board = createPvpBoardGrid();
+  const isCompactLandscape = isCompactLandscapeSize(size);
+  const sideMargin = Math.max(14, Math.min(40, Math.floor(size.width * 0.05)));
+  const bottomMargin = isCompactLandscape ? 104 : size.height < 430 ? 30 : 58;
+  const availableWidth = Math.max(220, size.width - sideMargin * 2);
+  const availableHeight = Math.max(size.height < 430 ? 150 : 180, size.height - topMargin - bottomMargin);
+  const cellSize = Math.max(12, Math.floor(Math.min(availableWidth / board.columns, availableHeight / board.rows)));
+  const boardWidth = board.columns * cellSize;
+  const boardHeight = board.rows * cellSize;
+
+  return createPvpBoardGrid(
+    cellSize,
+    Math.floor((size.width - boardWidth) / 2),
+    Math.max(8, Math.floor(topMargin + (availableHeight - boardHeight) / 2)),
+  );
+}
+
 function directionFromAction(action: InputAction): Direction | null {
   switch (action) {
     case "move-up":
@@ -199,6 +257,19 @@ function directionFromAction(action: InputAction): Direction | null {
   }
 }
 
+function directionToInputAction(direction: Direction): InputAction {
+  switch (direction) {
+    case "up":
+      return "move-up";
+    case "right":
+      return "move-right";
+    case "down":
+      return "move-down";
+    case "left":
+      return "move-left";
+  }
+}
+
 function shouldStartInLocalPvpMode(): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -211,19 +282,38 @@ function shouldStartInLocalPvpMode(): boolean {
   }
 }
 
+function shouldShowPvpDebugMode(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const searchParams = new URLSearchParams(window.location.search);
+    return searchParams.get("debugPvp") === "1" || searchParams.get("debug") === "1";
+  } catch {
+    return false;
+  }
+}
+
 export class Game {
   private readonly canvas: HTMLCanvasElement;
   private readonly ui: GameUiElements;
   private readonly renderer: Renderer;
   private readonly input: InputController;
   private readonly audio: AudioController;
+  private readonly pvpConnection: PvpConnectionController;
   private readonly unsubscribers: Unsubscribe[] = [];
   private readonly activeDirectionalInputs = new Map<string, ActiveDirectionalInput>();
   private readonly activeSpeedInputs = new Map<string, ActiveSpeedInput>();
   private readonly bootMode: "solo" | "local-pvp";
+  private readonly debugPvpVisible: boolean;
+  private readonly buildVersion: string;
   private shellView: ShellView = "main-menu";
-  private runMode: "solo" | "local-pvp" = "solo";
+  private runMode: MatchMode = "solo";
   private roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
+  private isOnlinePvpSession = false;
+  private onlineSession: OnlinePvpSessionState | null = null;
+  private random = createPrng(createSeed());
 
   private match: MatchRuntimeState = createMatchState();
   private players: PlayerRuntimeState[] = createSoloPlayers();
@@ -244,6 +334,16 @@ export class Game {
   };
 
   private get primaryPlayer(): PlayerRuntimeState {
+    const onlineSession = this.onlineSession;
+
+    if (this.match.mode === "online-pvp" && onlineSession !== null) {
+      const onlinePlayer = this.players.find((player) => player.id === onlineSession.localPlayerId);
+
+      if (onlinePlayer) {
+        return onlinePlayer;
+      }
+    }
+
     return this.players[0] ?? this.createFallbackPrimaryPlayer();
   }
 
@@ -633,6 +733,20 @@ export class Game {
     this.renderer = createRenderer(this.canvas);
     this.input = createInputController({ target: window, touchControls: this.ui.touchControls });
     this.audio = createAudioController();
+    this.debugPvpVisible = shouldShowPvpDebugMode();
+    this.buildVersion = resolveBuildVersion();
+    this.pvpConnection = createPvpConnectionController({
+      url: options.pvpConnectionOptions?.url ?? resolvePvpWebSocketUrl(),
+      socketFactory: options.pvpConnectionOptions?.socketFactory,
+      now: options.pvpConnectionOptions?.now,
+      reconnectDelayMs: options.pvpConnectionOptions?.reconnectDelayMs,
+      maxReconnectAttempts: options.pvpConnectionOptions?.maxReconnectAttempts,
+      sessionStorage: options.pvpConnectionOptions?.sessionStorage,
+      onPeerInput: this.handlePeerInput,
+      onSnapshot: this.handlePvpSnapshot,
+      onGameOver: this.handlePvpGameOver,
+    });
+    this.unsubscribers.push(this.pvpConnection.subscribe(this.handlePvpConnectionState));
     this.bootMode = shouldStartInLocalPvpMode() ? "local-pvp" : "solo";
     this.runMode = this.bootMode;
     this.shellView = this.bootMode === "local-pvp" ? "active-run" : "main-menu";
@@ -677,6 +791,7 @@ export class Game {
     this.unbindUi();
     window.removeEventListener("resize", this.handleResize);
     window.removeEventListener("orientationchange", this.handleResize);
+    this.pvpConnection.destroy();
     this.input.destroy();
     this.audio.destroy();
     this.renderer.destroy();
@@ -693,7 +808,9 @@ export class Game {
     if (this.phase === "playing") {
       this.playElapsed += delta;
 
-      if (this.match.mode === "local-pvp") {
+      if (this.match.mode === "online-pvp") {
+        this.advanceOnlinePvp(delta);
+      } else if (this.match.mode === "local-pvp") {
         this.advanceLocalPvp(delta);
       } else {
         this.advanceSolo(delta);
@@ -788,6 +905,155 @@ export class Game {
     if (this.phase === "playing") {
       this.updateLocalPvpWorld();
     }
+  }
+
+  private advanceOnlinePvp(delta: number): void {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return;
+    }
+
+    session.tickAccumulatorMs += delta;
+
+    const tickIntervalMs = Math.max(1, Math.round(1_000 / session.tickRate));
+    let advanced = false;
+    let guard = 0;
+
+    while (session.tickAccumulatorMs >= tickIntervalMs && guard < 8) {
+      session.tickAccumulatorMs -= tickIntervalMs;
+      guard += 1;
+      advanced = true;
+
+      const result = advancePvpTick(session.runtime);
+
+      if (result.gameOver !== null && session.lastServerGameOver === null) {
+        session.syncNotice = session.syncNotice ?? "等待服务端结算";
+      }
+    }
+
+    this.syncOnlinePvpRuntimeState();
+
+    if (!advanced && session.runtime.match.phase === "gameOver" && session.lastServerGameOver === null) {
+      session.tickAccumulatorMs = 0;
+    }
+  }
+
+  private syncOnlinePvpRuntimeState(options: { readonly authoritativeGameOver?: ServerGameOverMessage | null } = {}): void {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return;
+    }
+
+    const runtime = session.runtime;
+    const authoritativeGameOver = options.authoritativeGameOver ?? session.lastServerGameOver;
+
+    this.grid = runtime.grid;
+    this.match.mode = "online-pvp";
+    this.match.tick = runtime.match.tick;
+    this.match.winnerId = authoritativeGameOver === null
+      ? null
+      : authoritativeGameOver.winner === "draw"
+        ? null
+        : authoritativeGameOver.winner;
+    this.match.phase = authoritativeGameOver === null ? "playing" : "gameOver";
+
+    for (const runtimePlayer of runtime.players) {
+      const appPlayer = this.players.find((player) => player.id === runtimePlayer.id);
+
+      if (!appPlayer) {
+        continue;
+      }
+
+      appPlayer.label = runtimePlayer.id.toUpperCase();
+      appPlayer.inputOrigin = runtimePlayer.id === session.localPlayerId ? "local" : "remote";
+      appPlayer.snake = runtimePlayer.snake.map((cell) => ({ ...cell }));
+      appPlayer.movement.direction = runtimePlayer.movement.direction;
+      appPlayer.movement.directionQueue = [...runtimePlayer.movement.directionQueue];
+      appPlayer.movement.pendingGrowthSegments = runtimePlayer.movement.pendingGrowthSegments;
+      appPlayer.lifecycle.phase = runtimePlayer.lifecycle.phase;
+      appPlayer.lifecycle.deathReason = runtimePlayer.lifecycle.deathReason;
+      appPlayer.lifecycle.birthCell = appPlayer.snake[0] ? { ...appPlayer.snake[0] } : appPlayer.lifecycle.birthCell;
+      appPlayer.progress.score = runtimePlayer.progress.score;
+      appPlayer.progress.coresEaten = runtimePlayer.progress.coresEaten;
+    }
+
+    this.rebuildAllPlayerSnakeOccupancy();
+  }
+
+  private applyOnlinePvpSnapshotCorrection(message: ServerSnapshotMessage): void {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return;
+    }
+
+    const runtime = session.runtime;
+    runtime.match.tick = message.tick;
+    runtime.match.winnerId = null;
+
+    if (message.phase === "finished") {
+      runtime.match.phase = "gameOver";
+    } else {
+      runtime.match.phase = "playing";
+    }
+
+    for (const runtimePlayer of runtime.players) {
+      const head = message.snakeHeads[runtimePlayer.id];
+      const alive = message.alive[runtimePlayer.id];
+
+      runtimePlayer.lifecycle.phase = alive ? "playing" : "gameOver";
+      runtimePlayer.lifecycle.deathReason = alive ? null : runtimePlayer.lifecycle.deathReason ?? "unknown";
+
+      if (head !== null && runtimePlayer.snake[0] !== undefined) {
+        const deltaColumn = head.column - runtimePlayer.snake[0].column;
+        const deltaRow = head.row - runtimePlayer.snake[0].row;
+
+        runtimePlayer.snake = runtimePlayer.snake.map((cell) => ({
+          column: cell.column + deltaColumn,
+          row: cell.row + deltaRow,
+        }));
+      }
+
+      this.rebuildOnlinePvpSnakeOccupancy(runtimePlayer, runtime.grid);
+    }
+  }
+
+  private rebuildOnlinePvpSnakeOccupancy(player: PvpRuntimeState["players"][number], grid: GridMetrics): void {
+    const cellCount = grid.columns * grid.rows;
+
+    if (player.movement.snakeOccupancy.length !== cellCount) {
+      player.movement.snakeOccupancy = new Uint8Array(cellCount);
+    } else {
+      player.movement.snakeOccupancy.fill(0);
+    }
+
+    for (const segment of player.snake) {
+      if (segment.column < 0 || segment.column >= grid.columns || segment.row < 0 || segment.row >= grid.rows) {
+        continue;
+      }
+
+      player.movement.snakeOccupancy[segment.row * grid.columns + segment.column] = 1;
+    }
+  }
+
+  private recordOnlinePvpInput(playerId: PlayerId, tick: number, sequence: number, direction: Direction): boolean {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return false;
+    }
+
+    return recordPvpInput(
+      session.runtime.inputState,
+      playerId,
+      sequence,
+      tick,
+      direction,
+      session.inputDelayTicks,
+      Date.now(),
+    );
   }
 
   private getLocalPvpMovementSpeedState(player: PlayerRuntimeState): MovementSpeedState {
@@ -903,6 +1169,10 @@ export class Game {
   }
 
   private resolveLocalPvpDirection(player: PlayerRuntimeState): Direction {
+    if (this.match.mode === "online-pvp") {
+      return player.movement.directionQueue.shift() ?? player.movement.direction;
+    }
+
     if (player.id === "p1") {
       return player.movement.directionQueue.shift() ?? player.movement.direction;
     }
@@ -914,13 +1184,23 @@ export class Game {
     for (const player of this.players) {
       this.applyQueuedInputCommandsForPlayer(player, tick);
     }
+
+    for (let index = this.inputState.queue.length - 1; index >= 0; index -= 1) {
+      const command = this.inputState.queue[index];
+
+      if (!command || command.tick > tick) {
+        continue;
+      }
+
+      this.inputState.queue.splice(index, 1);
+    }
   }
 
   private applyQueuedInputCommandsForPlayer(player: PlayerRuntimeState, tick: number): void {
     let lastAppliedSequence = this.inputState.lastAppliedSequenceByPlayer[player.id] ?? 0;
 
     for (const command of this.inputState.queue) {
-      if (command.playerId !== player.id || command.sequence <= lastAppliedSequence || command.tick > tick) {
+      if (command.playerId !== player.id || command.tick > tick) {
         continue;
       }
 
@@ -936,10 +1216,11 @@ export class Game {
         player.movement.isBoosting = false;
       }
 
-      lastAppliedSequence = command.sequence;
+      lastAppliedSequence = Math.max(lastAppliedSequence, command.sequence);
     }
 
     this.inputState.lastAppliedSequenceByPlayer[player.id] = lastAppliedSequence;
+    this.inputState.lastProcessedTickByPlayer[player.id] = tick;
   }
 
   private pickScriptedPvpDirection(player: PlayerRuntimeState): Direction {
@@ -1024,7 +1305,16 @@ export class Game {
 
   private readonly handleResize = (): void => {
     const size = this.renderer.resize();
-    this.grid = this.buildGrid(size);
+    this.grid = this.match.mode === "online-pvp" ? this.buildOnlinePvpGrid(size) : this.buildGrid(size);
+
+    if (this.match.mode === "online-pvp") {
+      if (this.onlineSession) {
+        this.onlineSession.runtime.grid = this.grid;
+      }
+
+      this.syncUi(true, size);
+      return;
+    }
 
     if ((this.phase === "playing" || this.phase === "paused" || this.phase === "ready") && !isCurrentPlacementValid({
       grid: this.grid,
@@ -1046,6 +1336,11 @@ export class Game {
 
   private readonly handleInput = (command: InputCommand): void => {
     if (this.shellView === "main-menu" || this.shellView === "pvp-room") {
+      return;
+    }
+
+    if (this.match.mode === "online-pvp") {
+      this.handleOnlinePvpInput(command);
       return;
     }
 
@@ -1102,6 +1397,46 @@ export class Game {
     }
   };
 
+  private handleOnlinePvpInput(command: InputCommand): void {
+    if (command.kind !== "pressed") {
+      return;
+    }
+
+    const direction = directionFromAction(command.action);
+
+    if (!direction || this.onlineSession === null || this.onlineSession.runtime.match.phase === "gameOver") {
+      return;
+    }
+
+    const session = this.onlineSession;
+    const playerId = session.localPlayerId;
+    const scheduledTick = session.runtime.match.tick + session.inputDelayTicks;
+    const sequence = session.nextSequence;
+    session.nextSequence += 1;
+
+    const accepted = this.recordOnlinePvpInput(playerId, scheduledTick, sequence, direction);
+
+    if (!accepted) {
+      return;
+    }
+
+    this.queuePlayerInputCommand({
+      playerId,
+      tick: scheduledTick,
+      action: command.action,
+      kind: command.kind,
+      origin: "local",
+      sequence,
+    });
+
+    this.pvpConnection.sendInput({
+      type: "input",
+      seq: sequence,
+      tick: scheduledTick,
+      direction,
+    });
+  }
+
   private handleLocalPvpInput(command: InputCommand): void {
     if (command.kind !== "pressed") {
       return;
@@ -1124,20 +1459,54 @@ export class Game {
 
   private enqueueInputCommand(command: InputCommand, origin: PlayerInputOrigin): void {
     this.activeInputSequence += 1;
-    const queuedCommand: PlayerInputCommand = {
+    this.queuePlayerInputCommand({
       playerId: command.playerId ?? "p1",
       tick: this.match.tick,
       action: command.action,
       kind: command.kind,
       origin,
       sequence: this.activeInputSequence,
-    };
+    });
+  }
 
-    this.inputState.queue.push(queuedCommand);
+  private queuePlayerInputCommand(command: PlayerInputCommand): boolean {
+    const lastProcessedTick = this.inputState.lastProcessedTickByPlayer[command.playerId] ?? -1;
+    const seenSequences = this.inputState.seenSequencesByPlayer[command.playerId] ?? new Set<number>();
+
+    if (command.tick <= lastProcessedTick || seenSequences.has(command.sequence)) {
+      return false;
+    }
+
+    seenSequences.add(command.sequence);
+    this.inputState.seenSequencesByPlayer[command.playerId] = seenSequences;
+    this.inputState.lastReceivedSequenceByPlayer[command.playerId] = Math.max(
+      this.inputState.lastReceivedSequenceByPlayer[command.playerId] ?? 0,
+      command.sequence,
+    );
+
+    const insertionIndex = this.inputState.queue.findIndex((existing) => {
+      if (existing.tick !== command.tick) {
+        return existing.tick > command.tick;
+      }
+
+      if (existing.sequence !== command.sequence) {
+        return existing.sequence > command.sequence;
+      }
+
+      return existing.playerId > command.playerId;
+    });
+
+    if (insertionIndex === -1) {
+      this.inputState.queue.push(command);
+    } else {
+      this.inputState.queue.splice(insertionIndex, 0, command);
+    }
 
     if (this.inputState.queue.length > 96) {
       this.inputState.queue.splice(0, this.inputState.queue.length - 96);
     }
+
+    return true;
   }
 
   private readonly handleStartPointer = (event: PointerEvent): void => {
@@ -1156,6 +1525,48 @@ export class Game {
     this.openPvpRoomPanel();
   };
 
+  private readonly handleCreateRoomPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.pvpConnection.createPrivateRoom();
+  };
+
+  private readonly handleJoinRoomPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+
+    if (this.pvpConnection.getState().flow === "join" && this.pvpConnection.getState().roomCode === null) {
+      this.pvpConnection.joinPrivateRoom();
+      return;
+    }
+
+    this.pvpConnection.openJoinRoomEntry();
+  };
+
+  private readonly handleReadyRoomPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.pvpConnection.toggleReady();
+  };
+
+  private readonly handleCancelMatchmakingPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.pvpConnection.cancelMatchmaking();
+  };
+
+  private readonly handleCopyRoomCodePointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    const roomCode = this.pvpConnection.getState().roomCode;
+
+    if (!roomCode || typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
+      return;
+    }
+
+    void navigator.clipboard.writeText(roomCode).catch(() => undefined);
+  };
+
+  private readonly handleRoomCodeInput = (): void => {
+    this.pvpConnection.updateJoinCode(this.ui.roomCodeInput.value);
+    this.syncUi(true);
+  };
+
   private readonly handleContinuePointer = (event: PointerEvent): void => {
     event.preventDefault();
     this.continueRun();
@@ -1171,15 +1582,126 @@ export class Game {
     this.returnToMainMenu();
   };
 
-  private readonly handleUnavailableRoomActionPointer = (event: PointerEvent): void => {
-    event.preventDefault();
-    this.showRoomUnavailableNotice();
-  };
-
   private readonly handlePausePointer = (event: PointerEvent): void => {
     event.preventDefault();
     this.togglePause();
   };
+
+  private readonly handlePvpConnectionState = (pvpState: PvpConnectionState): void => {
+    if (pvpState.status === "playing" && this.shellView === "pvp-room" && !this.isOnlinePvpSession) {
+      this.startOnlinePvpRun();
+      return;
+    }
+
+    this.syncUi(true);
+  };
+
+  private readonly handlePvpSnapshot = (message: ServerSnapshotMessage): void => {
+    if (this.match.mode !== "online-pvp" || this.onlineSession === null) {
+      return;
+    }
+
+    const session = this.onlineSession;
+    const predictedSnapshot = createPvpSnapshot(session.runtime);
+
+    session.latestSnapshot = {
+      phase: message.phase,
+      tick: message.tick,
+      stateHash: message.stateHash,
+      snakeHeads: message.snakeHeads,
+      alive: message.alive,
+    };
+    session.lastSnapshotHash = message.stateHash;
+    session.lastSnapshotTick = message.tick;
+
+    if (predictedSnapshot.stateHash !== message.stateHash) {
+      session.syncNotice = `同步修正 tick ${message.tick}`;
+      this.applyOnlinePvpSnapshotCorrection(message);
+    } else if (session.syncNotice !== null) {
+      session.syncNotice = null;
+    }
+
+    this.syncOnlinePvpRuntimeState();
+    this.syncUi(true);
+  };
+
+  private readonly handlePvpGameOver = (message: ServerGameOverMessage): void => {
+    if (this.match.mode !== "online-pvp" || this.onlineSession === null) {
+      return;
+    }
+
+    const session = this.onlineSession;
+    session.lastServerGameOver = message;
+    session.syncNotice = null;
+    session.runtime.match.phase = "gameOver";
+    session.runtime.match.winnerId = message.winner === "draw" ? null : message.winner;
+    session.runtime.match.tick = message.finalTick;
+    this.syncOnlinePvpRuntimeState({ authoritativeGameOver: message });
+    this.syncUi(true);
+  };
+
+  private readonly handlePeerInput = (message: ServerPeerInputMessage): void => {
+    if (this.match.mode !== "online-pvp" || this.onlineSession === null) {
+      return;
+    }
+
+    const playerId = message.playerSlot;
+
+    if (playerId === this.onlineSession.localPlayerId) {
+      return;
+    }
+
+    const accepted = this.recordOnlinePvpInput(playerId, message.tick, message.seq, message.direction);
+
+    if (!accepted) {
+      return;
+    }
+
+    this.queuePlayerInputCommand({
+      playerId,
+      tick: message.tick,
+      action: directionToInputAction(message.direction),
+      kind: "pressed",
+      origin: "remote",
+      sequence: message.seq,
+    });
+  };
+
+  private buildPvpDebugInput(): {
+    visible: boolean;
+    localTick: number;
+    remoteInputLag: number;
+    bufferedInputs: number;
+    connectionState: string;
+    playerSlot: string | null;
+  } | null {
+    if (!this.debugPvpVisible) {
+      return null;
+    }
+
+    const connectionState = this.pvpConnection.getState();
+    const playerSlot = connectionState.playerSlot;
+    const localPlayerId = this.onlineSession?.localPlayerId ?? playerSlot;
+    const remotePlayerId = localPlayerId === "p1" ? "p2" : "p1";
+    let nextRemoteInputTick = Number.POSITIVE_INFINITY;
+
+    for (const command of this.inputState.queue) {
+      if (command.playerId !== remotePlayerId) {
+        continue;
+      }
+
+      nextRemoteInputTick = Math.min(nextRemoteInputTick, command.tick);
+    }
+
+    return {
+      visible: true,
+      localTick: this.match.tick,
+      remoteInputLag: Number.isFinite(nextRemoteInputTick) ? Math.max(0, nextRemoteInputTick - this.match.tick) : 0,
+      bufferedInputs: this.inputState.queue.length,
+      connectionState: connectionState.status,
+      playerSlot,
+    };
+  }
 
   private bindUi(): void {
     this.ui.startButton.addEventListener("pointerup", this.handleStartPointer);
@@ -1188,9 +1710,12 @@ export class Game {
     this.ui.continueButton.addEventListener("pointerup", this.handleContinuePointer);
     this.ui.mainMenuButton.addEventListener("pointerup", this.handleMainMenuPointer);
     this.ui.roomBackButton.addEventListener("pointerup", this.handleRoomBackPointer);
-    this.ui.createRoomButton.addEventListener("pointerup", this.handleUnavailableRoomActionPointer);
-    this.ui.joinRoomButton.addEventListener("pointerup", this.handleUnavailableRoomActionPointer);
-    this.ui.readyRoomButton.addEventListener("pointerup", this.handleUnavailableRoomActionPointer);
+    this.ui.createRoomButton.addEventListener("pointerup", this.handleCreateRoomPointer);
+    this.ui.joinRoomButton.addEventListener("pointerup", this.handleJoinRoomPointer);
+    this.ui.readyRoomButton.addEventListener("pointerup", this.handleReadyRoomPointer);
+    this.ui.cancelMatchmakingButton.addEventListener("pointerup", this.handleCancelMatchmakingPointer);
+    this.ui.copyRoomCodeButton.addEventListener("pointerup", this.handleCopyRoomCodePointer);
+    this.ui.roomCodeInput.addEventListener("input", this.handleRoomCodeInput);
     this.ui.pauseButton.addEventListener("pointerup", this.handlePausePointer);
   }
 
@@ -1201,29 +1726,33 @@ export class Game {
     this.ui.continueButton.removeEventListener("pointerup", this.handleContinuePointer);
     this.ui.mainMenuButton.removeEventListener("pointerup", this.handleMainMenuPointer);
     this.ui.roomBackButton.removeEventListener("pointerup", this.handleRoomBackPointer);
-    this.ui.createRoomButton.removeEventListener("pointerup", this.handleUnavailableRoomActionPointer);
-    this.ui.joinRoomButton.removeEventListener("pointerup", this.handleUnavailableRoomActionPointer);
-    this.ui.readyRoomButton.removeEventListener("pointerup", this.handleUnavailableRoomActionPointer);
+    this.ui.createRoomButton.removeEventListener("pointerup", this.handleCreateRoomPointer);
+    this.ui.joinRoomButton.removeEventListener("pointerup", this.handleJoinRoomPointer);
+    this.ui.readyRoomButton.removeEventListener("pointerup", this.handleReadyRoomPointer);
+    this.ui.cancelMatchmakingButton.removeEventListener("pointerup", this.handleCancelMatchmakingPointer);
+    this.ui.copyRoomCodeButton.removeEventListener("pointerup", this.handleCopyRoomCodePointer);
+    this.ui.roomCodeInput.removeEventListener("input", this.handleRoomCodeInput);
     this.ui.pauseButton.removeEventListener("pointerup", this.handlePausePointer);
   }
 
   private startPveRun(): void {
     this.runMode = "solo";
+    this.isOnlinePvpSession = false;
+    this.onlineSession = null;
     this.shellView = "active-run";
+    this.pvpConnection.disconnect();
     this.roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
     this.beginRun();
   }
 
   private openPvpRoomPanel(): void {
     this.runMode = "solo";
+    this.isOnlinePvpSession = false;
+    this.onlineSession = null;
     this.shellView = "pvp-room";
-    this.roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
+    this.roomNotice = "点击 PVP 后会自动连接服务并开始匹配。";
     this.resetMatchRun("solo", "ready");
-  }
-
-  private showRoomUnavailableNotice(): void {
-    this.roomNotice = "暂未接入房间服务：创建、加入和准备会在下一步真实房间 MVP 中实现。";
-    this.syncUi(true);
+    this.pvpConnection.enterMatchmaking();
   }
 
   private continueRun(): void {
@@ -1243,7 +1772,10 @@ export class Game {
 
   private returnToMainMenu(): void {
     this.runMode = "solo";
+    this.isOnlinePvpSession = false;
+    this.onlineSession = null;
     this.shellView = "main-menu";
+    this.pvpConnection.disconnect();
     this.roomNotice = "联机房间服务将在下一步接入；当前不会创建真实房间。";
     this.resetMatchRun("solo", "ready");
   }
@@ -1258,8 +1790,65 @@ export class Game {
     this.resetRun("playing");
   }
 
+  private startOnlinePvpRun(): void {
+    const connectionState = this.pvpConnection.getState();
+    const gameStart = connectionState.gameStart;
+
+    if (!gameStart || connectionState.playerSlot === null) {
+      return;
+    }
+
+    this.runMode = "online-pvp";
+    this.shellView = "active-run";
+    this.isOnlinePvpSession = true;
+    this.roomNotice = "在线对局已开始";
+    this.grid = this.buildOnlinePvpGrid(this.renderer.getSize());
+    this.random = createPrng(gameStart.seed);
+    this.match = createMatchState("online-pvp", "playing");
+    this.match.tick = gameStart.startTick;
+    this.players = createOnlinePvpPlayers(connectionState.playerSlot, "playing");
+    this.timing = resetTimingState(createTimingState());
+    this.world = createWorldState();
+    this.spawn = createSpawnState();
+    this.inputState = createInputState();
+    this.inputState.lastProcessedTickByPlayer.p1 = gameStart.startTick - 1;
+    this.inputState.lastProcessedTickByPlayer.p2 = gameStart.startTick - 1;
+    this.activeDirectionalInputs.clear();
+    this.activeSpeedInputs.clear();
+    this.speedRuntime.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
+    const runtime = createPvpRuntime({
+      seed: gameStart.seed,
+      startTick: gameStart.startTick,
+      tickRate: gameStart.tickRate,
+      inputDelayTicks: gameStart.inputDelayTicks,
+      grid: this.grid,
+      mode: "online-pvp",
+    });
+    this.onlineSession = {
+      localPlayerId: connectionState.playerSlot,
+      inputDelayTicks: gameStart.inputDelayTicks,
+      seed: gameStart.seed,
+      startTick: gameStart.startTick,
+      tickRate: gameStart.tickRate,
+      runtime,
+      latestSnapshot: null,
+      lastSnapshotHash: null,
+      lastSnapshotTick: gameStart.startTick,
+      lastServerGameOver: null,
+      syncNotice: null,
+      tickAccumulatorMs: 0,
+      nextSequence: 1,
+    };
+    this.syncOnlinePvpRuntimeState();
+    this.syncUi(true);
+  }
+
   private restartRun(): void {
     if (this.shellView !== "active-run") {
+      return;
+    }
+
+    if (this.match.mode === "online-pvp") {
       return;
     }
 
@@ -1270,6 +1859,10 @@ export class Game {
 
   private togglePause(): void {
     if (this.phase !== "playing" && this.phase !== "paused") {
+      return;
+    }
+
+    if (this.match.mode === "online-pvp") {
       return;
     }
 
@@ -1470,33 +2063,86 @@ export class Game {
     this.resetMatchRun(this.runMode, phase);
   }
 
-  private resetMatchRun(mode: "solo" | "local-pvp", phase: GamePhase): void {
+  private resetMatchRun(mode: MatchMode, phase: GamePhase, options: ResetMatchRunOptions = {}): void {
+    const seed = options.seed ?? createSeed();
+    const startTick = options.startTick ?? 0;
+    const localPlayerId = options.localPlayerId ?? "p1";
+
+    this.random = createPrng(seed);
     this.match = createMatchState(mode, phase);
-    this.players = mode === "local-pvp" ? createLocalPvpPlayers(phase) : createSoloPlayers(phase, this.highScore);
+    this.match.tick = startTick;
+    this.players = mode === "local-pvp"
+      ? createLocalPvpPlayers(phase)
+      : mode === "online-pvp"
+        ? createOnlinePvpPlayers(localPlayerId, phase)
+        : createSoloPlayers(phase, this.highScore);
     this.timing = resetTimingState(createTimingState());
     this.world = createWorldState();
     this.spawn = createSpawnState();
     this.inputState = createInputState();
+    this.inputState.lastProcessedTickByPlayer.p1 = startTick - 1;
+    this.inputState.lastProcessedTickByPlayer.p2 = startTick - 1;
     this.activeDirectionalInputs.clear();
     this.activeSpeedInputs.clear();
-    this.placeStartingPlayers(mode);
+    this.placeStartingPlayers(mode, localPlayerId);
     this.world.foods = this.createFoods();
     this.progress.score = 0;
     this.progress.coresEaten = 0;
-    this.spawn.starAttractorNeed = STAR_ATTRACTOR_ENABLED ? rollStarAttractorNeed(this.spawn.starAttractorNeedIndex) : 0;
+    this.spawn.starAttractorNeed = STAR_ATTRACTOR_ENABLED ? rollStarAttractorNeed(this.spawn.starAttractorNeedIndex, this.random) : 0;
     this.speedRuntime.currentMovementSpeed = { mode: "base", multiplier: 1, stepMs: BASE_STEP_MS };
     this.rebuildSnakeOccupancy();
     this.syncUi(true);
   }
 
-  private placeStartingPlayers(mode: "solo" | "local-pvp"): void {
+  private placeStartingPlayers(mode: MatchMode, localPlayerId: PlayerId = "p1"): void {
     if (mode === "local-pvp") {
       this.placeLocalPvpPlayers();
       return;
     }
 
+    if (mode === "online-pvp") {
+      this.placeOnlinePvpPlayers(localPlayerId);
+      return;
+    }
+
     this.snake = this.createStartingSnake();
     this.lifecycle.birthCell = this.snake[0] ? { ...this.snake[0] } : { column: 0, row: 0 };
+  }
+
+  private placeOnlinePvpPlayers(localPlayerId: PlayerId): void {
+    const localPlayer = this.players.find((player) => player.id === localPlayerId);
+    const remotePlayer = this.players.find((player) => player.id !== localPlayerId);
+
+    if (!localPlayer || !remotePlayer) {
+      return;
+    }
+
+    const localIsFirst = localPlayerId === "p1";
+    const firstHead = {
+      column: Math.max(STARTING_LENGTH, Math.floor(this.grid.columns * 0.32)),
+      row: Math.floor(this.grid.rows / 2),
+    };
+    const secondHead = {
+      column: Math.min(this.grid.columns - STARTING_LENGTH - 1, Math.ceil(this.grid.columns * 0.68)),
+      row: Math.floor(this.grid.rows / 2),
+    };
+
+    const localHead = localIsFirst ? firstHead : secondHead;
+    const remoteHead = localIsFirst ? secondHead : firstHead;
+    const localDirection = localIsFirst ? "right" : "left";
+    const remoteDirection = localIsFirst ? "left" : "right";
+
+    localPlayer.snake = this.createStartingSnakeFrom(localHead, localDirection);
+    localPlayer.movement.direction = localDirection;
+    localPlayer.lifecycle.birthCell = { ...localHead };
+
+    remotePlayer.snake = this.createStartingSnakeFrom(remoteHead, remoteDirection);
+    remotePlayer.movement.direction = remoteDirection;
+    remotePlayer.lifecycle.birthCell = { ...remoteHead };
+
+    for (const player of this.players) {
+      this.rebuildPlayerSnakeOccupancy(player);
+    }
   }
 
   private placeLocalPvpPlayers(): void {
@@ -1558,7 +2204,7 @@ export class Game {
         radius: getBlackHoleFoodAvoidRadiusCells(blackHole),
       })),
       wallPadding: 1,
-      random: Math.random,
+      random: this.random,
     });
 
     if (!placement) {
@@ -1677,7 +2323,7 @@ export class Game {
       starCores: this.starCores,
       includeStarAttractors: STAR_ATTRACTOR_ENABLED,
       extraBlockedCells: extraBlocked,
-    }));
+    }), this.random);
   }
 
   private refillFoods(): void {
@@ -1861,6 +2507,7 @@ export class Game {
         existingStarBeasts: this.starBeasts,
         currentTime,
         state: this.spawn,
+        random: this.random,
       },
       amount,
     );
@@ -1880,6 +2527,7 @@ export class Game {
       existingStarBeasts: this.starBeasts,
       currentTime,
       state: this.spawn,
+      random: this.random,
     });
   }
 
@@ -1932,6 +2580,7 @@ export class Game {
         starBeasts: this.starBeasts,
         birthCell: this.birthCell,
       }),
+      random: this.random,
     });
   }
 
@@ -1947,6 +2596,7 @@ export class Game {
       existingStarBeasts: this.starBeasts,
       currentTime: this.playElapsed / 1000,
       state: this.spawn,
+      random: this.random,
     });
   }
 
@@ -1981,6 +2631,7 @@ export class Game {
       foods: this.foods,
       state: this.spawn,
       currentTimeMs,
+      random: this.random,
     });
   }
 
@@ -2011,6 +2662,7 @@ export class Game {
       isOutOfBounds: (cell) => this.isOutOfBounds(cell),
       collidesWithPlayerBody: (cell) => this.collidesWithPlayerBody(cell),
       handlePlayerDeath: (reason) => this.handlePlayerDeath(reason),
+      random: this.random,
     });
   }
 
@@ -2239,6 +2891,10 @@ export class Game {
     return createGrid(size, this.measureTopMargin(size));
   }
 
+  private buildOnlinePvpGrid(size: CanvasSize): GridMetrics {
+    return createFixedPvpGrid(size, this.measureTopMargin(size));
+  }
+
   private measureTopMargin(size: CanvasSize): number {
     const hudBottom = this.ui.hudStrip.getBoundingClientRect().bottom;
 
@@ -2260,6 +2916,10 @@ export class Game {
   }
 
   private createSnapshot(): GameSnapshot {
+    if (this.match.mode === "online-pvp" && this.onlineSession !== null) {
+      return this.buildOnlinePvpSnapshot();
+    }
+
     return buildGameSnapshot({
       phase: this.phase,
       match: {
@@ -2314,6 +2974,121 @@ export class Game {
     });
   }
 
+  private buildOnlinePvpSnapshot(): GameSnapshot {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return buildGameSnapshot({
+        phase: this.phase,
+        match: {
+          mode: this.match.mode,
+          phase: this.match.phase,
+          tick: this.match.tick,
+          winnerId: this.match.winnerId,
+        },
+        grid: this.grid,
+        snake: this.snake,
+        foods: this.foods,
+        starAttractors: this.starAttractors,
+        starAttractorEffects: this.starAttractorEffects,
+        starBeasts: this.starBeasts,
+        starCores: this.starCores,
+        starBeastEffects: this.starBeastEffects,
+        blackHoles: this.blackHoles,
+        blackHoleAlert: this.blackHoleAlert,
+        blackHoleCue: this.blackHoleCue,
+        rewardBurstOrigin: this.rewardBurstOrigin,
+        score: this.score,
+        highScore: this.highScore,
+        livesRemaining: this.livesRemaining,
+        deathReason: this.deathReason,
+        direction: this.direction,
+        speedMode: this.currentMovementSpeed.mode,
+        speedMultiplier: this.currentMovementSpeed.multiplier,
+        speedCue: this.speedCue,
+        reviving: this.reviving,
+        reviveEndsAt: this.reviveEndsAt,
+        elapsed: this.elapsed,
+        wallGrace: this.wallGrace,
+        includeStarAttractor: false,
+        players: this.players.map((player) => ({
+          id: player.id,
+          label: player.label,
+          inputOrigin: player.inputOrigin,
+          snake: player.snake,
+          direction: player.movement.direction,
+          score: player.progress.score,
+          highScore: player.progress.highScore,
+          livesRemaining: player.lifecycle.livesRemaining,
+          deathReason: player.lifecycle.deathReason,
+          speedMode: player.speed.currentMovementSpeed.mode,
+          speedMultiplier: player.speed.currentMovementSpeed.multiplier,
+          speedCue: player.speed.speedCue,
+          reviving: player.lifecycle.reviving,
+          reviveEndsAt: player.lifecycle.reviveEndsAt,
+          elapsed: this.elapsed,
+          wallGrace: player.lifecycle.wallGrace,
+        })),
+      });
+    }
+
+    const localPlayer = session.runtime.players.find((player) => player.id === session.localPlayerId) ?? session.runtime.players[0];
+    const players: PlayerSnapshotInput[] = session.runtime.players.map((player) => ({
+      id: player.id,
+      label: player.id.toUpperCase(),
+      inputOrigin: (player.id === session.localPlayerId ? "local" : "remote") as PlayerInputOrigin,
+      snake: player.snake,
+      direction: player.movement.direction,
+      score: player.progress.score,
+      highScore: 0,
+      livesRemaining: this.ui.lifeHearts.length,
+      deathReason: player.lifecycle.phase === "playing" ? null : player.lifecycle.deathReason,
+      speedMode: "base" as const,
+      speedMultiplier: 1,
+      speedCue: null,
+      reviving: false,
+      reviveEndsAt: 0,
+      elapsed: this.elapsed,
+      wallGrace: null,
+    }));
+
+    return buildGameSnapshot({
+      phase: this.match.phase,
+      match: {
+        mode: this.match.mode,
+        phase: this.match.phase,
+        tick: this.match.tick,
+        winnerId: this.match.winnerId,
+      },
+      grid: this.grid,
+      snake: localPlayer?.snake ?? [],
+      foods: session.runtime.foods,
+      starAttractors: [],
+      starAttractorEffects: [],
+      starBeasts: [],
+      starCores: [],
+      starBeastEffects: [],
+      blackHoles: [],
+      blackHoleAlert: null,
+      blackHoleCue: null,
+      rewardBurstOrigin: null,
+      score: localPlayer?.progress.score ?? 0,
+      highScore: 0,
+      livesRemaining: this.ui.lifeHearts.length,
+      deathReason: localPlayer?.lifecycle.phase === "playing" ? null : localPlayer?.lifecycle.deathReason ?? null,
+      direction: localPlayer?.movement.direction ?? "right",
+      speedMode: "base",
+      speedMultiplier: 1,
+      speedCue: null,
+      reviving: false,
+      reviveEndsAt: 0,
+      elapsed: this.elapsed,
+      wallGrace: null,
+      includeStarAttractor: false,
+      players,
+    });
+  }
+
   public getUnlockedFeatures(): UnlockedFeatures {
     return computeUnlockedFeatures(this.getProgress());
   }
@@ -2353,6 +3128,8 @@ export class Game {
       shellView: this.shellView,
       grid: this.grid,
       progress,
+      buildVersion: this.buildVersion,
+      pvpConnectionStatus: this.pvpConnection.getState().status,
       livesRemaining: this.livesRemaining,
       lastFps: this.lastFps,
       lastSimulationMs: this.lastSimulationMs,
@@ -2364,6 +3141,9 @@ export class Game {
       elapsed: this.elapsed,
       lifeHeartCount: this.ui.lifeHearts.length,
       roomNotice: this.roomNotice,
+      syncNotice: this.onlineSession?.syncNotice ?? null,
+      pvpPanel: this.shellView === "pvp-room" ? this.pvpConnection.getPanelState(Date.now()) : null,
+      debug: this.buildPvpDebugInput(),
       match: {
         mode: this.match.mode,
         phase: this.match.phase,

@@ -1,0 +1,19 @@
+services:
+  pvp-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: neon-serpent-pvp
+    restart: unless-stopped
+    environment:
+      PORT: "8787"
+      NODE_ENV: production
+      PVP_MAX_CONNECTIONS: "250"
+      PVP_MAX_ROOMS: "120"
+      PVP_MAX_QUEUE: "250"
+      PVP_HEARTBEAT_INTERVAL_MS: "10000"
+      PVP_CONNECTION_TIMEOUT_MS: "30000"
+      ALLOWED_ORIGINS: "https://your-github-pages-domain.github.io,https://your-custom-domain.com"
+      # LOG_LEVEL: silent
+    ports:
+      - "127.0.0.1:8787:8787"

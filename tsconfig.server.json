@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "rootDir": ".",
+    "outDir": "dist-server",
+    "declaration": true
+  },
+  "include": ["server/**/*.ts", "src/pvp/net/**/*.ts"],
+  "exclude": ["server/__tests__/**", "server/**/*.test.ts"]
+}

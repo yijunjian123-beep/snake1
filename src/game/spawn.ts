@@ -1,7 +1,7 @@
-import { CARDINAL_DIRECTIONS, stepCell } from "./direction";
-import { cellKey, isCellInsideZone, isInsideGrid, isWithinChebyshevRadius } from "./gridMath";
-import type { Direction, GridCell, GridMetrics } from "./types";
-import type { SafeSpawnConfig, SafeSpawnZone } from "./progression";
+import { CARDINAL_DIRECTIONS, stepCell } from "./direction.js";
+import { cellKey, isCellInsideZone, isInsideGrid, isWithinChebyshevRadius } from "./gridMath.js";
+import type { Direction, GridCell, GridMetrics } from "./types.js";
+import type { SafeSpawnConfig, SafeSpawnZone } from "./progression.js";
 
 interface SpawnCandidateRule {
   ignoreHeadRadius: boolean;

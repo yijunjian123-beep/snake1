@@ -12,9 +12,48 @@
 - TypeScript
 - Canvas 2D
 - 原生 CSS
-- 不使用后端
+- 默认不使用后端；仅在线 PVP 改造允许新增最小 Node.js + TypeScript WebSocket 后端
 - 不使用外部图片、字体、音频素材
 - 允许使用浏览器原生 Web Audio API 生成音效
+
+## 在线 PVP 例外规则
+
+在线 PVP 是唯一允许突破“无后端”的方向。新增内容必须服务于 1v1 真人联机，并且保持单人 PVE 和 `localPvp` 本地双人烟测入口可玩。
+
+允许新增：
+- Node.js + TypeScript WebSocket PVP 后端。
+- shared PVP 协议类型。
+- shared PVP 游戏逻辑。
+- 服务端房间管理。
+- 服务端随机匹配。
+- 服务端权威 tick / 权威 gameOver。
+- Docker 部署配置。
+- GitHub Pages 前端部署配置。
+- PVP 压测脚本。
+
+禁止新增：
+- 数据库。
+- 登录系统。
+- 支付。
+- 排行榜。
+- 大型后端框架，除非项目已有。
+- 把网络逻辑直接塞进 UI 组件。
+- 硬编码生产 WebSocket 地址。
+- 破坏 PVE 和 `localPvp`。
+
+部署目标：
+- 前端部署到 GitHub Pages。
+- 后端部署到腾讯云轻量应用服务器 / CVM / Docker，运行 Node 服务。
+- 生产 WebSocket 地址格式：`wss://your-domain/ws`。
+- 本地 WebSocket 地址：`ws://localhost:8787/ws`。
+- 前端必须通过 `VITE_PVP_WS_URL` 读取后端地址。
+
+容量目标：
+- 200 人同时在线。
+- 约 100 个并发 1v1 房间。
+- `maxConnections` 默认 250。
+- `maxRooms` 默认 120。
+- `maxQueue` 默认 250。
 
 ## 设备要求
 
@@ -91,9 +130,10 @@
 - 如果 build 失败，先修复再总结
 - 不要为了炫技牺牲可玩性
 - 不要添加多余框架
-- 不要添加联网功能
+- 除在线 PVP 例外规则外，不要添加联网功能
 - 不要添加账号系统
-- 不要添加真实货币、广告或后端
+- 不要添加真实货币、广告、数据库、登录系统、支付或排行榜
+- 除在线 PVP 最小服务外，不要添加其他后端能力
 
 ## 工作方式
 

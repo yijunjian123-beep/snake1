@@ -144,6 +144,46 @@ button {
   margin-bottom: 10px;
 }
 
+.hud-status {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.hud-status__pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border: 1px solid rgba(143, 251, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(9, 17, 36, 0.46);
+  color: rgba(247, 251, 255, 0.8);
+  font-size: 0.64rem;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.hud-status__pill--build {
+  border-color: rgba(0, 245, 255, 0.28);
+  color: var(--cyan);
+}
+
+.hud-status__pill--pvp[data-state="connected"] {
+  border-color: rgba(219, 255, 82, 0.3);
+  color: var(--lime);
+}
+
+.hud-status__pill--pvp[data-state="disconnected"] {
+  border-color: rgba(255, 43, 214, 0.24);
+  color: #ff9fdc;
+}
+
 .hud-lives {
   position: absolute;
   top: calc(var(--board-top, 240px) - 20px);
@@ -637,7 +677,11 @@ button {
 .entry-actions[hidden],
 .pvp-room-panel[hidden],
 .settlement-actions[hidden],
-.primary-action[hidden] {
+.primary-action[hidden],
+.room-stats[hidden],
+.room-players[hidden],
+.room-code-field[hidden],
+.secondary-action[hidden] {
   display: none;
 }
 
@@ -691,10 +735,34 @@ button {
   margin-top: 4px;
 }
 
+.room-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.room-stat {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid rgba(143, 251, 255, 0.22);
+  border-radius: 999px;
+  color: rgba(247, 251, 255, 0.82);
+  background: rgba(9, 17, 36, 0.52);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
 .room-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.secondary-action--wide {
+  grid-column: span 2;
 }
 
 .room-code-field {
@@ -719,12 +787,25 @@ button {
   color: var(--text);
   background: rgba(3, 5, 14, 0.48);
   outline: none;
+  text-transform: uppercase;
+}
+
+.room-code-field input[readonly] {
+  color: rgba(247, 251, 255, 0.88);
+  background: rgba(11, 16, 30, 0.64);
 }
 
 .room-status {
   margin: 0;
   color: rgba(247, 251, 255, 0.76);
   font-size: 0.76rem;
+  line-height: 1.32;
+}
+
+.room-players {
+  margin: 0;
+  color: rgba(247, 251, 255, 0.72);
+  font-size: 0.72rem;
   line-height: 1.32;
 }
 
@@ -854,7 +935,9 @@ button {
   position: absolute;
   right: max(16px, env(safe-area-inset-right));
   bottom: max(16px, env(safe-area-inset-bottom));
+  flex-wrap: wrap;
   gap: 10px;
+  max-width: min(640px, calc(100vw - 32px));
   padding: 8px 10px;
   border: 1px solid rgba(143, 251, 255, 0.2);
   border-radius: 8px;
@@ -1059,6 +1142,17 @@ button {
   .hud-strip {
     width: min(calc(100vw - 20px), 700px);
     padding: 10px 10px 10px;
+  }
+
+  .hud-status {
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .hud-status__pill {
+    min-height: 22px;
+    padding: 0 8px;
+    font-size: 0.58rem;
   }
 
   .brand-subtitle {
@@ -1325,6 +1419,10 @@ button {
     gap: 7px;
   }
 
+  .room-stats {
+    gap: 6px;
+  }
+
   .secondary-action,
   .room-code-field input {
     min-height: 36px;
@@ -1369,6 +1467,11 @@ button {
 
   .game-shell[data-shell-view="pvp-room"] .room-status {
     max-height: 32px;
+    overflow: hidden;
+  }
+
+  .game-shell[data-shell-view="pvp-room"] .room-players {
+    max-height: 34px;
     overflow: hidden;
   }
 

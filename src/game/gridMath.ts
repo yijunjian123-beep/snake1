@@ -1,4 +1,4 @@
-import type { GridCell, GridMetrics } from "./types";
+import type { GridCell, GridMetrics } from "./types.js";
 
 export interface GridRadiusZone {
   center: GridCell;

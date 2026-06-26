@@ -1,7 +1,7 @@
-import { createFoodSpawnContext, type FoodSpawnContext } from "./foodSpawn";
-import { getStarAttractorCells, getStarBeastCells, getStarCoreCells } from "./spawnSelectors";
-import { cellKey, cellsMatch } from "./gridMath";
-import type { BlackHole, GridCell, GridMetrics, StarAttractor, StarBeast, StarCore } from "./types";
+import { createFoodSpawnContext, type FoodSpawnContext } from "./foodSpawn.js";
+import { getStarAttractorCells, getStarBeastCells, getStarCoreCells } from "./spawnSelectors.js";
+import { cellKey, cellsMatch } from "./gridMath.js";
+import type { BlackHole, GridCell, GridMetrics, StarAttractor, StarBeast, StarCore } from "./types.js";
 
 export interface BuildFoodSpawnContextInput {
   grid: GridMetrics;

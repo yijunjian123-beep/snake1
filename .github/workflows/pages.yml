@@ -3,19 +3,27 @@ name: Deploy GitHub Pages
 on:
   push:
     branches:
+      - master
       - snake1-combo
+      - snake1-pvp
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    env:
+      VITE_BASE_PATH: /${{ github.event.repository.name }}/
+      VITE_BUILD_VERSION: ${{ github.sha }}
+      VITE_PVP_WS_URL: ${{ vars.VITE_PVP_WS_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,13 +37,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build site
-        run: npm run build:pages
+      - name: Typecheck
+        run: npm run typecheck
 
-      - name: Deploy to gh-pages branch
-        uses: peaceiris/actions-gh-pages@v4
+      - name: Test
+        run: npm test
+
+      - name: Build site
+        run: npm run build
+
+      - name: Upload dist
+        uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: ./dist
-          force_orphan: true
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        name: Deploy GitHub Pages
+        uses: actions/deploy-pages@v4

@@ -1,3 +1,4 @@
+﻿import { formatBuildVersionLabel } from "../buildInfo.js";
 import { getNextLengthUnlockCopy, type GameProgress } from "./progression";
 import type {
   BlackHole,
@@ -22,6 +23,7 @@ import type {
   StarCore,
 } from "./types";
 import type { SpeedCueState, UiSyncState, WallGraceState } from "./gameState";
+import type { PvpConnectionStatus, PvpPanelState } from "../pvp/net/state.js";
 
 export const PHASE_LABELS: Record<GamePhase, string> = {
   ready: "待机",
@@ -41,6 +43,7 @@ export const HUD_TICKER_LINES = [
 const DEATH_REASON_LABELS: Record<DeathReason, string> = {
   wall: "撞到墙壁了",
   snake_body: "撞到蛇身体了",
+  head_to_head: "和对手正面相撞了",
   black_hole: "被黑洞吸入了",
   star_beast: "被星兽撞到了",
   unknown: "意外死亡",
@@ -105,6 +108,8 @@ export interface UiSyncInput {
   shellView?: ShellView;
   grid: GridMetrics;
   progress: GameProgress;
+  buildVersion: string;
+  pvpConnectionStatus: PvpConnectionStatus;
   livesRemaining: number;
   lastFps: number;
   lastSimulationMs: number;
@@ -118,6 +123,18 @@ export interface UiSyncInput {
   match: MatchSnapshot;
   players?: readonly PlayerUiInput[];
   roomNotice?: string;
+  syncNotice?: string | null;
+  pvpPanel?: PvpPanelState | null;
+  debug?: PvpDebugInput | null;
+}
+
+export interface PvpDebugInput {
+  visible: boolean;
+  localTick: number;
+  remoteInputLag: number;
+  bufferedInputs: number;
+  connectionState: string;
+  playerSlot: string | null;
 }
 
 export interface PlayerUiInput {
@@ -133,24 +150,29 @@ export interface PlayerUiInput {
 interface PanelSecondaryLabelInput {
   isMainMenu: boolean;
   isPvpRoom: boolean;
-  isLocalPvp: boolean;
+  isPvpMatch: boolean;
+  isOnlinePvp: boolean;
   isReady: boolean;
   pvpStatus: string | null;
   deathReason: DeathReason | null;
+  pvpPanel: PvpPanelState | null;
 }
 
 interface PanelMetaLabelInput {
   isMainMenu: boolean;
   isPvpRoom: boolean;
-  isLocalPvp: boolean;
+  isPvpMatch: boolean;
+  isOnlinePvp: boolean;
   isReady: boolean;
   isGameOver: boolean;
   isReviving: boolean;
   isRevivePrompt: boolean;
   roomNotice?: string;
+  syncNotice?: string | null;
   pvpStatus: string | null;
   players: readonly PlayerUiInput[];
   reviveCountdownSeconds: number;
+  pvpPanel: PvpPanelState | null;
 }
 
 export interface UiSyncModel {
@@ -164,10 +186,32 @@ export interface UiSyncModel {
   startButtonDisabled: boolean;
   entryActionsHidden: boolean;
   pvpRoomPanelHidden: boolean;
+  buildVersionLabel: string;
+  pvpConnectionLabel: string;
+  pvpConnectionState: string;
   roomStatusLabel: string;
+  roomQueueStatsHidden: boolean;
+  queueWaitLabel: string;
+  queueOnlineLabel: string;
+  queueCountLabel: string;
+  roomPlayersLabel: string;
+  roomPlayersHidden: boolean;
+  roomCodeFieldHidden: boolean;
+  roomCodeInputValue: string;
+  roomCodeInputPlaceholder: string;
+  roomCodeInputReadOnly: boolean;
+  createRoomButtonText: string;
   createRoomButtonDisabled: boolean;
+  joinRoomButtonText: string;
   joinRoomButtonDisabled: boolean;
+  readyRoomButtonText: string;
+  readyRoomButtonHidden: boolean;
   readyRoomButtonDisabled: boolean;
+  cancelMatchmakingButtonText: string;
+  cancelMatchmakingButtonHidden: boolean;
+  cancelMatchmakingButtonDisabled: boolean;
+  copyRoomCodeButtonHidden: boolean;
+  copyRoomCodeButtonDisabled: boolean;
   settlementActionsHidden: boolean;
   continueButtonText: string;
   continueButtonAriaLabel: string;
@@ -190,6 +234,11 @@ export interface UiSyncModel {
   stateLabel: string;
   fpsLabel: string;
   sizeLabel: string;
+  debugLocalTickLabel: string;
+  debugRemoteInputLagLabel: string;
+  debugBufferedInputsLabel: string;
+  debugConnectionStateLabel: string;
+  debugPlayerSlotLabel: string;
   perfLabel: string;
 }
 
@@ -216,10 +265,32 @@ export function createUiSyncState(): UiSyncState {
     startButtonDisabled: false,
     entryActionsHidden: true,
     pvpRoomPanelHidden: true,
+    buildVersionLabel: "",
+    pvpConnectionLabel: "",
+    pvpConnectionState: "",
     roomStatusLabel: "",
+    roomQueueStatsHidden: true,
+    queueWaitLabel: "",
+    queueOnlineLabel: "",
+    queueCountLabel: "",
+    roomPlayersLabel: "",
+    roomPlayersHidden: true,
+    roomCodeFieldHidden: true,
+    roomCodeInputValue: "",
+    roomCodeInputPlaceholder: "",
+    roomCodeInputReadOnly: false,
+    createRoomButtonText: "",
     createRoomButtonDisabled: false,
+    joinRoomButtonText: "",
     joinRoomButtonDisabled: false,
+    readyRoomButtonText: "",
+    readyRoomButtonHidden: true,
     readyRoomButtonDisabled: false,
+    cancelMatchmakingButtonText: "",
+    cancelMatchmakingButtonHidden: true,
+    cancelMatchmakingButtonDisabled: false,
+    copyRoomCodeButtonHidden: true,
+    copyRoomCodeButtonDisabled: true,
     settlementActionsHidden: true,
     continueButtonText: "",
     continueButtonAriaLabel: "",
@@ -242,6 +313,11 @@ export function createUiSyncState(): UiSyncState {
     stateLabel: "",
     fpsLabel: "",
     sizeLabel: "",
+    debugLocalTickLabel: "",
+    debugRemoteInputLagLabel: "",
+    debugBufferedInputsLabel: "",
+    debugConnectionStateLabel: "",
+    debugPlayerSlotLabel: "",
     perfLabel: "",
     tickerCurrentText: "",
     tickerNextText: "",
@@ -333,41 +409,52 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
   const isRunReady = isReady && shellView === "active-run";
   const isSettlement = isGameOver || isRevivePrompt;
   const currentLengthDisplay = `${input.progress.snakeLength}/100`;
-  const isLocalPvp = input.match.mode === "local-pvp";
-  const playerSummary = isLocalPvp ? getPlayerSummary(input.players ?? []) : null;
-  const pvpStatus = isLocalPvp ? getPvpStatus(input.match, input.players ?? []) : null;
+  const isPvpMatch = input.match.mode !== "solo";
+  const isOnlinePvp = input.match.mode === "online-pvp";
+  const pvpPanel = isPvpRoom ? input.pvpPanel ?? null : null;
+  const playerSummary = isPvpMatch ? getPlayerSummary(input.players ?? []) : null;
+  const pvpStatus = isPvpMatch ? getPvpStatus(input.match, input.players ?? []) : null;
+  const pvpConnectionState = getPvpConnectionState(input.pvpConnectionStatus);
   const panelPrimaryValue = isMainMenu
     ? "NEON SERPENT"
     : isPvpRoom
-      ? "PVP 房间"
+      ? pvpPanel?.heading ?? "在线 PVP"
       : isReady
-        ? isLocalPvp ? "LOCAL PVP" : "NEON SERPENT"
+        ? isPvpMatch ? (isOnlinePvp ? "ONLINE PVP" : "LOCAL PVP") : "NEON SERPENT"
         : playerSummary ?? currentLengthDisplay;
   const lengthLabel = playerSummary ?? currentLengthDisplay;
-  const unlockTitleLabel = isLocalPvp ? "LOCAL PVP" : unlockCopy.title;
-  const unlockValueLabel = isLocalPvp ? pvpStatus ?? `Tick ${input.match.tick}` : unlockCopy.value;
+  const unlockTitleLabel = isPvpMatch ? (isOnlinePvp ? "ONLINE PVP" : "LOCAL PVP") : unlockCopy.title;
+  const unlockValueLabel = isPvpMatch ? pvpStatus ?? `Tick ${input.match.tick}` : unlockCopy.value;
   const reviveCountdownSeconds = getReviveCountdownSeconds(input.reviving, input.reviveEndsAt, input.elapsed);
+  const debug = input.debug ?? null;
   const panelSecondaryLabel = getPanelSecondaryLabel({
     isMainMenu,
     isPvpRoom,
-    isLocalPvp,
+    isPvpMatch,
+    isOnlinePvp,
     isReady,
     pvpStatus,
     deathReason: input.deathReason,
+    pvpPanel,
   });
   const panelMetaLabel = getPanelMetaLabel({
     isMainMenu,
     isPvpRoom,
-    isLocalPvp,
+    isPvpMatch,
+    isOnlinePvp,
     isReady,
     isGameOver,
     isReviving,
     isRevivePrompt,
     roomNotice: input.roomNotice,
+    syncNotice: input.syncNotice ?? null,
     pvpStatus,
     players: input.players ?? [],
     reviveCountdownSeconds,
+    pvpPanel,
   });
+  const buildVersionLabel = formatBuildVersionLabel(input.buildVersion);
+  const pvpConnectionLabel = `PVP ${pvpConnectionState}`;
 
   return {
     rootPhase: input.phase,
@@ -380,10 +467,32 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
     startButtonDisabled: isReviving,
     entryActionsHidden: !isMainMenu,
     pvpRoomPanelHidden: !isPvpRoom,
-    roomStatusLabel: input.roomNotice ?? "联机房间服务将在下一步接入；当前仅保留开发烟测入口。",
-    createRoomButtonDisabled: false,
-    joinRoomButtonDisabled: false,
-    readyRoomButtonDisabled: false,
+    buildVersionLabel,
+    pvpConnectionLabel,
+    pvpConnectionState,
+    roomStatusLabel: pvpPanel?.statusText ?? input.roomNotice ?? "点击 PVP 后会自动连接服务并寻找对手。",
+    roomQueueStatsHidden: pvpPanel?.queueStatsHidden ?? true,
+    queueWaitLabel: pvpPanel?.waitLabel ?? "",
+    queueOnlineLabel: pvpPanel?.onlineLabel ?? "",
+    queueCountLabel: pvpPanel?.queueLabel ?? "",
+    roomPlayersLabel: pvpPanel?.roomPlayersLabel ?? "",
+    roomPlayersHidden: pvpPanel?.roomPlayersHidden ?? true,
+    roomCodeFieldHidden: pvpPanel?.roomCodeFieldHidden ?? true,
+    roomCodeInputValue: pvpPanel?.roomCodeInputValue ?? "",
+    roomCodeInputPlaceholder: pvpPanel?.roomCodeInputPlaceholder ?? "输入房间码",
+    roomCodeInputReadOnly: pvpPanel?.roomCodeInputReadOnly ?? false,
+    createRoomButtonText: pvpPanel?.createRoomButtonText ?? "邀请好友",
+    createRoomButtonDisabled: pvpPanel?.createRoomButtonDisabled ?? false,
+    joinRoomButtonText: pvpPanel?.joinRoomButtonText ?? "输入房间码",
+    joinRoomButtonDisabled: pvpPanel?.joinRoomButtonDisabled ?? false,
+    readyRoomButtonText: pvpPanel?.readyButtonText ?? "准备",
+    readyRoomButtonHidden: pvpPanel?.readyButtonHidden ?? true,
+    readyRoomButtonDisabled: pvpPanel?.readyButtonDisabled ?? false,
+    cancelMatchmakingButtonText: pvpPanel?.cancelButtonText ?? "取消匹配",
+    cancelMatchmakingButtonHidden: pvpPanel?.cancelButtonHidden ?? true,
+    cancelMatchmakingButtonDisabled: pvpPanel?.cancelButtonDisabled ?? false,
+    copyRoomCodeButtonHidden: pvpPanel?.copyButtonHidden ?? true,
+    copyRoomCodeButtonDisabled: pvpPanel?.copyButtonDisabled ?? true,
     settlementActionsHidden: !isSettlement,
     continueButtonText: "继续游戏",
     continueButtonAriaLabel: "继续游戏",
@@ -394,7 +503,7 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
     pauseButtonDisabled: input.phase !== "playing" && input.phase !== "paused",
     pauseButtonText: input.phase === "paused" ? "▶" : "❚❚",
     pauseButtonAriaLabel: input.phase === "paused" ? "继续游戏" : "暂停游戏",
-    panelPrimaryLabel: isMainMenu ? "选择模式" : isPvpRoom ? "双蛇竞技" : isReady ? "准备开始" : isLocalPvp ? "PVP 结算" : "当前/目标长度",
+    panelPrimaryLabel: isMainMenu ? "选择模式" : isPvpRoom ? "在线 PVP" : isReady ? "准备开始" : isPvpMatch ? "PVP 结算" : "当前/目标长度",
     panelPrimaryValue,
     panelSecondaryLabel,
     panelMetaHidden: false,
@@ -408,6 +517,11 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
     stateLabel: PHASE_LABELS[input.phase],
     fpsLabel: `${input.lastFps || "--"} FPS`,
     sizeLabel: `${input.size.width} x ${input.size.height} @${input.size.dpr.toFixed(1)}`,
+    debugLocalTickLabel: debug?.visible ? `localTick: ${debug.localTick}` : "",
+    debugRemoteInputLagLabel: debug?.visible ? `remoteInputLag: ${debug.remoteInputLag}` : "",
+    debugBufferedInputsLabel: debug?.visible ? `bufferedInputs: ${debug.bufferedInputs}` : "",
+    debugConnectionStateLabel: debug?.visible ? `connectionState: ${debug.connectionState}` : "",
+    debugPlayerSlotLabel: debug?.visible ? `playerSlot: ${debug.playerSlot ?? "-"}` : "",
     perfLabel: `逻辑 ${input.lastSimulationMs.toFixed(1)}ms · 渲染 ${input.lastRenderMs.toFixed(1)}ms`,
   };
 }
@@ -482,9 +596,79 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
     state.pvpRoomPanelHidden = model.pvpRoomPanelHidden;
   }
 
+  if (state.buildVersionLabel !== model.buildVersionLabel) {
+    ui.buildVersionLabel.textContent = model.buildVersionLabel;
+    state.buildVersionLabel = model.buildVersionLabel;
+  }
+
+  if (state.pvpConnectionLabel !== model.pvpConnectionLabel) {
+    ui.pvpConnectionLabel.textContent = model.pvpConnectionLabel;
+    state.pvpConnectionLabel = model.pvpConnectionLabel;
+  }
+
+  if (state.pvpConnectionState !== model.pvpConnectionState) {
+    ui.pvpConnectionLabel.dataset.state = model.pvpConnectionState;
+    state.pvpConnectionState = model.pvpConnectionState;
+  }
+
   if (state.roomStatusLabel !== model.roomStatusLabel) {
     ui.roomStatusLabel.textContent = model.roomStatusLabel;
     state.roomStatusLabel = model.roomStatusLabel;
+  }
+
+  if (state.roomQueueStatsHidden !== model.roomQueueStatsHidden) {
+    ui.roomQueueStats.hidden = model.roomQueueStatsHidden;
+    state.roomQueueStatsHidden = model.roomQueueStatsHidden;
+  }
+
+  if (state.queueWaitLabel !== model.queueWaitLabel) {
+    ui.queueWaitLabel.textContent = model.queueWaitLabel;
+    state.queueWaitLabel = model.queueWaitLabel;
+  }
+
+  if (state.queueOnlineLabel !== model.queueOnlineLabel) {
+    ui.queueOnlineLabel.textContent = model.queueOnlineLabel;
+    state.queueOnlineLabel = model.queueOnlineLabel;
+  }
+
+  if (state.queueCountLabel !== model.queueCountLabel) {
+    ui.queueCountLabel.textContent = model.queueCountLabel;
+    state.queueCountLabel = model.queueCountLabel;
+  }
+
+  if (state.roomPlayersLabel !== model.roomPlayersLabel) {
+    ui.roomPlayersLabel.textContent = model.roomPlayersLabel;
+    state.roomPlayersLabel = model.roomPlayersLabel;
+  }
+
+  if (state.roomPlayersHidden !== model.roomPlayersHidden) {
+    ui.roomPlayersLabel.hidden = model.roomPlayersHidden;
+    state.roomPlayersHidden = model.roomPlayersHidden;
+  }
+
+  if (state.roomCodeFieldHidden !== model.roomCodeFieldHidden) {
+    ui.roomCodeField.hidden = model.roomCodeFieldHidden;
+    state.roomCodeFieldHidden = model.roomCodeFieldHidden;
+  }
+
+  if (state.roomCodeInputValue !== model.roomCodeInputValue) {
+    ui.roomCodeInput.value = model.roomCodeInputValue;
+    state.roomCodeInputValue = model.roomCodeInputValue;
+  }
+
+  if (state.roomCodeInputPlaceholder !== model.roomCodeInputPlaceholder) {
+    ui.roomCodeInput.placeholder = model.roomCodeInputPlaceholder;
+    state.roomCodeInputPlaceholder = model.roomCodeInputPlaceholder;
+  }
+
+  if (state.roomCodeInputReadOnly !== model.roomCodeInputReadOnly) {
+    ui.roomCodeInput.readOnly = model.roomCodeInputReadOnly;
+    state.roomCodeInputReadOnly = model.roomCodeInputReadOnly;
+  }
+
+  if (state.createRoomButtonText !== model.createRoomButtonText) {
+    ui.createRoomButton.textContent = model.createRoomButtonText;
+    state.createRoomButtonText = model.createRoomButtonText;
   }
 
   if (state.createRoomButtonDisabled !== model.createRoomButtonDisabled) {
@@ -492,14 +676,54 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
     state.createRoomButtonDisabled = model.createRoomButtonDisabled;
   }
 
+  if (state.joinRoomButtonText !== model.joinRoomButtonText) {
+    ui.joinRoomButton.textContent = model.joinRoomButtonText;
+    state.joinRoomButtonText = model.joinRoomButtonText;
+  }
+
   if (state.joinRoomButtonDisabled !== model.joinRoomButtonDisabled) {
     ui.joinRoomButton.disabled = model.joinRoomButtonDisabled;
     state.joinRoomButtonDisabled = model.joinRoomButtonDisabled;
   }
 
+  if (state.readyRoomButtonText !== model.readyRoomButtonText) {
+    ui.readyRoomButton.textContent = model.readyRoomButtonText;
+    state.readyRoomButtonText = model.readyRoomButtonText;
+  }
+
+  if (state.readyRoomButtonHidden !== model.readyRoomButtonHidden) {
+    ui.readyRoomButton.hidden = model.readyRoomButtonHidden;
+    state.readyRoomButtonHidden = model.readyRoomButtonHidden;
+  }
+
   if (state.readyRoomButtonDisabled !== model.readyRoomButtonDisabled) {
     ui.readyRoomButton.disabled = model.readyRoomButtonDisabled;
     state.readyRoomButtonDisabled = model.readyRoomButtonDisabled;
+  }
+
+  if (state.cancelMatchmakingButtonText !== model.cancelMatchmakingButtonText) {
+    ui.cancelMatchmakingButton.textContent = model.cancelMatchmakingButtonText;
+    state.cancelMatchmakingButtonText = model.cancelMatchmakingButtonText;
+  }
+
+  if (state.cancelMatchmakingButtonHidden !== model.cancelMatchmakingButtonHidden) {
+    ui.cancelMatchmakingButton.hidden = model.cancelMatchmakingButtonHidden;
+    state.cancelMatchmakingButtonHidden = model.cancelMatchmakingButtonHidden;
+  }
+
+  if (state.cancelMatchmakingButtonDisabled !== model.cancelMatchmakingButtonDisabled) {
+    ui.cancelMatchmakingButton.disabled = model.cancelMatchmakingButtonDisabled;
+    state.cancelMatchmakingButtonDisabled = model.cancelMatchmakingButtonDisabled;
+  }
+
+  if (state.copyRoomCodeButtonHidden !== model.copyRoomCodeButtonHidden) {
+    ui.copyRoomCodeButton.hidden = model.copyRoomCodeButtonHidden;
+    state.copyRoomCodeButtonHidden = model.copyRoomCodeButtonHidden;
+  }
+
+  if (state.copyRoomCodeButtonDisabled !== model.copyRoomCodeButtonDisabled) {
+    ui.copyRoomCodeButton.disabled = model.copyRoomCodeButtonDisabled;
+    state.copyRoomCodeButtonDisabled = model.copyRoomCodeButtonDisabled;
   }
 
   if (state.settlementActionsHidden !== model.settlementActionsHidden) {
@@ -623,6 +847,36 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
     state.sizeLabel = model.sizeLabel;
   }
 
+  if (state.debugLocalTickLabel !== model.debugLocalTickLabel) {
+    ui.debugLocalTickLabel.hidden = !model.debugLocalTickLabel;
+    ui.debugLocalTickLabel.textContent = model.debugLocalTickLabel;
+    state.debugLocalTickLabel = model.debugLocalTickLabel;
+  }
+
+  if (state.debugRemoteInputLagLabel !== model.debugRemoteInputLagLabel) {
+    ui.debugRemoteInputLagLabel.hidden = !model.debugRemoteInputLagLabel;
+    ui.debugRemoteInputLagLabel.textContent = model.debugRemoteInputLagLabel;
+    state.debugRemoteInputLagLabel = model.debugRemoteInputLagLabel;
+  }
+
+  if (state.debugBufferedInputsLabel !== model.debugBufferedInputsLabel) {
+    ui.debugBufferedInputsLabel.hidden = !model.debugBufferedInputsLabel;
+    ui.debugBufferedInputsLabel.textContent = model.debugBufferedInputsLabel;
+    state.debugBufferedInputsLabel = model.debugBufferedInputsLabel;
+  }
+
+  if (state.debugConnectionStateLabel !== model.debugConnectionStateLabel) {
+    ui.debugConnectionStateLabel.hidden = !model.debugConnectionStateLabel;
+    ui.debugConnectionStateLabel.textContent = model.debugConnectionStateLabel;
+    state.debugConnectionStateLabel = model.debugConnectionStateLabel;
+  }
+
+  if (state.debugPlayerSlotLabel !== model.debugPlayerSlotLabel) {
+    ui.debugPlayerSlotLabel.hidden = !model.debugPlayerSlotLabel;
+    ui.debugPlayerSlotLabel.textContent = model.debugPlayerSlotLabel;
+    state.debugPlayerSlotLabel = model.debugPlayerSlotLabel;
+  }
+
   if (state.perfLabel !== model.perfLabel) {
     ui.stateLabel.title = model.perfLabel;
     state.perfLabel = model.perfLabel;
@@ -679,17 +933,33 @@ function getPvpStatus(match: MatchSnapshot, players: readonly PlayerUiInput[]): 
   return null;
 }
 
+function getPvpConnectionState(status: PvpConnectionStatus): "connected" | "disconnected" {
+  switch (status) {
+    case "connected":
+    case "matchmaking":
+    case "matched":
+    case "countdown":
+    case "playing":
+      return "connected";
+    case "connecting":
+    case "disconnected":
+    case "reconnecting":
+    case "error":
+      return "disconnected";
+  }
+}
+
 function getPanelSecondaryLabel(input: PanelSecondaryLabelInput): string {
   if (input.isMainMenu) {
     return "PVE 单人冒险 / PVP 双蛇竞技";
   }
 
   if (input.isPvpRoom) {
-    return "房间服务尚未接入";
+    return input.pvpPanel?.subheading ?? "默认自动匹配";
   }
 
-  if (input.isLocalPvp) {
-    return input.pvpStatus ?? "本地双人模拟";
+  if (input.isPvpMatch) {
+    return input.pvpStatus ?? (input.isOnlinePvp ? "在线真人对战" : "本地双人模拟");
   }
 
   if (input.isReady) {
@@ -705,19 +975,23 @@ function getPanelMetaLabel(input: PanelMetaLabelInput): string {
   }
 
   if (input.isPvpRoom) {
-    return input.roomNotice ?? "联机房间服务将在下一步接入；当前不会创建真实房间。";
+    return input.pvpPanel?.meta ?? input.roomNotice ?? "点击 PVP 后会自动连接服务并开始匹配。";
   }
 
   if (input.isReady) {
-    return input.isLocalPvp ? "P1 本地控制，P2 脚本模拟" : "长按方向键加速 · 长按 Shift 减速";
+    return input.isPvpMatch ? (input.isOnlinePvp ? "P1 本地输入，P2 远端同步" : "P1 本地控制，P2 脚本模拟") : "长按方向键加速 · 长按 Shift 减速";
   }
 
-  if (input.isGameOver && input.isLocalPvp) {
+  if (input.isGameOver && input.isPvpMatch) {
     return getPvpSettlementText(input.pvpStatus, input.players);
   }
 
   if (input.isGameOver) {
     return "可继续游戏或回到主界面";
+  }
+
+  if (input.isPvpMatch && input.isOnlinePvp && input.syncNotice) {
+    return input.syncNotice;
   }
 
   if (input.isReviving) {
@@ -777,3 +1051,4 @@ function getReviveCountdownSeconds(reviving: boolean, reviveEndsAt: number, elap
 
   return Math.max(1, Math.ceil((reviveEndsAt - elapsed) / 1000));
 }
+

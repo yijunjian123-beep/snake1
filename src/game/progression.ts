@@ -1,4 +1,4 @@
-import type { GridCell } from "./types";
+import type { GridCell } from "./types.js";
 
 export interface GameProgress {
   snakeLength: number;

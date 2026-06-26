@@ -53,6 +53,9 @@ function createFakeElement(): {
   textContent: string;
   hidden: boolean;
   disabled: boolean;
+  value: string;
+  placeholder: string;
+  readOnly: boolean;
   dataset: Record<string, string>;
   style: ReturnType<typeof createStyle>;
   title: string;
@@ -65,6 +68,9 @@ function createFakeElement(): {
     textContent: "",
     hidden: false,
     disabled: false,
+    value: "",
+    placeholder: "",
+    readOnly: false,
     dataset: Object.create(null),
     style: createStyle(),
     title: "",
@@ -80,15 +86,29 @@ function createFakeElement(): {
 function createUi() {
   const entryActions = createFakeElement();
   const pvpRoomPanel = createFakeElement();
+  const roomQueueStats = createFakeElement();
+  const roomPlayersLabel = createFakeElement();
+  const roomCodeField = createFakeElement();
+  const readyRoomButton = createFakeElement();
+  const cancelMatchmakingButton = createFakeElement();
+  const copyRoomCodeButton = createFakeElement();
   const settlementActions = createFakeElement();
 
   entryActions.hidden = true;
   pvpRoomPanel.hidden = true;
+  roomQueueStats.hidden = true;
+  roomPlayersLabel.hidden = true;
+  roomCodeField.hidden = true;
+  readyRoomButton.hidden = true;
+  cancelMatchmakingButton.hidden = true;
+  copyRoomCodeButton.hidden = true;
   settlementActions.hidden = true;
 
   return {
     root: createFakeElement(),
     hudStrip: createFakeElement(),
+    buildVersionLabel: createFakeElement(),
+    pvpConnectionLabel: createFakeElement(),
     startPanel: createFakeElement(),
     panelPrimaryLabel: createFakeElement(),
     panelPrimaryValue: createFakeElement(),
@@ -98,10 +118,18 @@ function createUi() {
     pveButton: createFakeElement(),
     pvpButton: createFakeElement(),
     pvpRoomPanel,
+    roomQueueStats,
+    queueWaitLabel: createFakeElement(),
+    queueOnlineLabel: createFakeElement(),
+    queueCountLabel: createFakeElement(),
+    roomPlayersLabel,
+    roomCodeField,
     roomCodeInput: createFakeElement(),
     createRoomButton: createFakeElement(),
     joinRoomButton: createFakeElement(),
-    readyRoomButton: createFakeElement(),
+    readyRoomButton,
+    cancelMatchmakingButton,
+    copyRoomCodeButton,
     roomBackButton: createFakeElement(),
     roomStatusLabel: createFakeElement(),
     settlementActions,
@@ -188,6 +216,8 @@ test("buildUiSyncModel returns the expected revive prompt and HUD values", () =>
       score: 120,
       elapsedTime: 18,
     },
+    buildVersion: "a1b2c3d4e5",
+    pvpConnectionStatus: "connected",
     livesRemaining: 2,
     lastFps: 58,
     lastSimulationMs: 1.25,
@@ -215,6 +245,9 @@ test("buildUiSyncModel returns the expected revive prompt and HUD values", () =>
   assert.equal(model.fpsLabel, "58 FPS");
   assert.equal(model.perfLabel, "逻辑 1.3ms · 渲染 3.5ms");
   assert.equal(model.sizeLabel, "960 x 540 @2.0");
+  assert.equal(model.buildVersionLabel, "build a1b2c3d");
+  assert.equal(model.pvpConnectionLabel, "PVP connected");
+  assert.equal(model.pvpConnectionState, "connected");
 });
 
 test("applyUiSyncModel writes the derived values into the UI cache and elements", () => {
@@ -230,6 +263,8 @@ test("applyUiSyncModel writes the derived values into the UI cache and elements"
       score: 0,
       elapsedTime: 0,
     },
+    buildVersion: "dev",
+    pvpConnectionStatus: "disconnected",
     livesRemaining: 3,
     lastFps: 0,
     lastSimulationMs: 0,
@@ -253,6 +288,9 @@ test("applyUiSyncModel writes the derived values into the UI cache and elements"
   assert.equal(ui.root.dataset.phase, "ready");
   assert.equal(ui.root.dataset.shellView, "main-menu");
   assert.equal(ui.root.style.getPropertyValue("--board-top"), "140px");
+  assert.equal(ui.buildVersionLabel.textContent, "build dev");
+  assert.equal(ui.pvpConnectionLabel.textContent, "PVP disconnected");
+  assert.equal(ui.pvpConnectionLabel.dataset.state, "disconnected");
   assert.equal(ui.startPanel.hidden, false);
   assert.equal(ui.entryActions.hidden, false);
   assert.equal(ui.pvpRoomPanel.hidden, true);
@@ -275,6 +313,8 @@ test("buildUiSyncModel exposes local PVP player scores and winner state", () => 
       score: 30,
       elapsedTime: 12,
     },
+    buildVersion: "sha-abcdef1",
+    pvpConnectionStatus: "connected",
     livesRemaining: 0,
     lastFps: 60,
     lastSimulationMs: 0.9,
@@ -318,6 +358,8 @@ test("buildUiSyncModel exposes local PVP player scores and winner state", () => 
   assert.equal(model.panelMetaLabel, "P2 获胜。P1：10分 / 长度7 / 撞到蛇身体了；P2：20分 / 长度9 / 存活");
   assert.equal(model.lengthLabel, "P1 10/7 · P2 20/9");
   assert.equal(model.unlockTitleLabel, "LOCAL PVP");
+  assert.equal(model.buildVersionLabel, "build sha-abc");
+  assert.equal(model.pvpConnectionLabel, "PVP connected");
   assert.equal(model.unlockValueLabel, "P2 获胜");
 });
 

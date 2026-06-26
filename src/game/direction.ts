@@ -1,4 +1,4 @@
-import type { Direction, GridCell } from "./types";
+import type { Direction, GridCell } from "./types.js";
 
 export const CARDINAL_DIRECTIONS: readonly Direction[] = ["up", "right", "down", "left"];
 

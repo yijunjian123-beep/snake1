@@ -14,6 +14,20 @@ async function pathExists(path) {
 }
 
 export async function resolve(specifier, context, defaultResolve) {
+  if ((specifier.startsWith("./") || specifier.startsWith("../")) && extname(specifier) === ".js") {
+    const parentPath = context.parentURL?.startsWith("file:")
+      ? dirname(fileURLToPath(context.parentURL))
+      : process.cwd();
+    const tsCandidatePath = resolvePath(parentPath, `${specifier.slice(0, -3)}.ts`);
+
+    if (await pathExists(tsCandidatePath)) {
+      return {
+        url: pathToFileURL(tsCandidatePath).href,
+        shortCircuit: true,
+      };
+    }
+  }
+
   if ((specifier.startsWith("./") || specifier.startsWith("../")) && extname(specifier) === "") {
     const parentPath = context.parentURL?.startsWith("file:")
       ? dirname(fileURLToPath(context.parentURL))

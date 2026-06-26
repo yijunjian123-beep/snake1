@@ -18,7 +18,7 @@ import type {
   StarCore,
   SpeedCueMode,
   SpeedMode,
-} from "./types";
+} from "./types.js";
 
 export interface ActiveDirectionalInput {
   action: Direction;
@@ -66,10 +66,32 @@ export interface UiSyncState {
   startButtonDisabled: boolean;
   entryActionsHidden: boolean;
   pvpRoomPanelHidden: boolean;
+  buildVersionLabel: string;
+  pvpConnectionLabel: string;
+  pvpConnectionState: string;
   roomStatusLabel: string;
+  roomQueueStatsHidden: boolean;
+  queueWaitLabel: string;
+  queueOnlineLabel: string;
+  queueCountLabel: string;
+  roomPlayersLabel: string;
+  roomPlayersHidden: boolean;
+  roomCodeFieldHidden: boolean;
+  roomCodeInputValue: string;
+  roomCodeInputPlaceholder: string;
+  roomCodeInputReadOnly: boolean;
+  createRoomButtonText: string;
   createRoomButtonDisabled: boolean;
+  joinRoomButtonText: string;
   joinRoomButtonDisabled: boolean;
+  readyRoomButtonText: string;
+  readyRoomButtonHidden: boolean;
   readyRoomButtonDisabled: boolean;
+  cancelMatchmakingButtonText: string;
+  cancelMatchmakingButtonHidden: boolean;
+  cancelMatchmakingButtonDisabled: boolean;
+  copyRoomCodeButtonHidden: boolean;
+  copyRoomCodeButtonDisabled: boolean;
   settlementActionsHidden: boolean;
   continueButtonText: string;
   continueButtonAriaLabel: string;
@@ -92,6 +114,11 @@ export interface UiSyncState {
   stateLabel: string;
   fpsLabel: string;
   sizeLabel: string;
+  debugLocalTickLabel: string;
+  debugRemoteInputLagLabel: string;
+  debugBufferedInputsLabel: string;
+  debugConnectionStateLabel: string;
+  debugPlayerSlotLabel: string;
   perfLabel: string;
   tickerCurrentText: string;
   tickerNextText: string;
@@ -208,6 +235,9 @@ export interface SpawnRuntimeState {
 export interface InputRuntimeState {
   activeInputSequence: number;
   lastAppliedSequenceByPlayer: Record<PlayerId, number>;
+  lastReceivedSequenceByPlayer: Record<PlayerId, number>;
+  lastProcessedTickByPlayer: Record<PlayerId, number>;
+  seenSequencesByPlayer: Record<PlayerId, Set<number>>;
   queue: PlayerInputCommand[];
 }
 

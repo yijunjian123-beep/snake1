@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-server
+coverage
+.git
+.codex
+tests
+docs
+scripts
+*.log
+*.md
+pnpm-lock.yaml

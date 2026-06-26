@@ -2,7 +2,9 @@
 
 ## 适用范围
 
-当前 PVP 以本地双人垫层为准：默认首屏显示 PVE / PVP 双入口，PVP 正式入口只进入房间面板壳层，通过 `?localPvp=1` 进入本地 PVP 烟测。P2 当前是脚本模拟输入，占位后续远端玩家；本计划先验证入口闭环、本地双蛇 tick、输入、碰撞、结算、渲染和性能预算，远端 PVP 接入后再追加网络专项。
+当前 PVP 已同时覆盖本地双人烟测和在线真人对战：默认首屏显示 PVE / PVP 双入口，`?localPvp=1` 继续作为本地 PVP 烟测入口，在线 PVP 则走服务端转发输入 + 客户端确定性模拟，P2 不再依赖 scripted 占位。本计划先验证入口闭环、本地双蛇 tick、输入、碰撞、结算、渲染和性能预算，再覆盖在线同步与断线/限流专项。
+
+在线 PVP 允许新增最小 Node.js + TypeScript WebSocket 后端、shared PVP 协议类型、shared PVP 游戏逻辑、服务端房间管理、随机匹配、权威 tick / 权威 `gameOver`、Docker 部署配置、GitHub Pages 前端部署配置和 PVP 压测脚本。仍禁止数据库、登录系统、支付、排行榜、大型后端框架、UI 组件内堆网络逻辑、硬编码生产 WebSocket 地址，以及任何破坏 PVE 或 `localPvp` 的改动。
 
 ## 测试目标
 
@@ -28,6 +30,8 @@ npm run build
 - 主入口和 PVE：`/`
 - PVP 房间壳层：`/` 后点击 PVP
 - 本地 PVP：`/?localPvp=1`
+- 本地 WebSocket 配置：`VITE_PVP_WS_URL=ws://localhost:8787/ws`
+- 生产 WebSocket 配置：`VITE_PVP_WS_URL=wss://your-domain/ws`
 
 如果 Windows 环境里 `npm` 或 `node` 不在 PATH，按 `docs/architecture/05-test-strategy.md` 里的捆绑 Node 方式执行同等命令。
 
@@ -161,9 +165,16 @@ npm run build
 如果后续从本地 PVP 变成联机 PVP，再追加：
 
 - [ ] 房间创建、加入、准备、开始和退出
+- [ ] 随机匹配、取消匹配和断线退队
 - [ ] 输入包按 `playerId + tick + sequence` 消费
 - [ ] 延迟、乱序、丢包和重复输入的处理
 - [ ] 断线、重连、对手离开和超时结算
+- [ ] 服务端权威 tick / 权威 `gameOver`
+- [ ] `maxConnections=250`、`maxRooms=120`、`maxQueue=250` 默认上限生效
+- [ ] 前端只通过 `VITE_PVP_WS_URL` 读取后端地址，生产不接受 `ws://localhost`
+- [ ] GitHub Pages 前端部署和 Docker 后端部署配置可用
+- [ ] 200 客户端 WebSocket 压测连接成功率 >= 98%
+- [ ] 约 100 个并发 1v1 房间压测可完成
 - [ ] 本地预测和远端校正不会造成明显回跳
 - [ ] 不同步时有可恢复或可结束的明确规则
 
@@ -173,6 +184,7 @@ npm run build
 - [ ] `npm run build` 通过
 - [ ] 单人核心玩法无回归
 - [ ] PVP 至少完成 10 局人工测试无阻塞异常
+- [ ] 在线 PVP 后端不可用时，PVE 和 `localPvp` 仍可玩
 - [ ] 桌面普通局接近 60 FPS，高压局没有连续不可玩卡顿
 - [ ] 移动端横屏可正常控制，竖屏提示不破坏页面
 - [ ] 长时间局没有明显内存泄漏或重开后变卡

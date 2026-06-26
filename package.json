@@ -5,14 +5,25 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
     "build": "tsc --noEmit && vite build",
     "build:pages": "vite build",
+    "loadtest:pvp": "node --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs scripts/pvp-load-test.ts",
+    "smoke:pvp-remote": "node --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs scripts/pvp-remote-smoke.ts",
     "test": "node --test --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs tests/*.test.ts",
+    "dev:pvp-server": "node --watch --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs server/index.ts",
+    "build:pvp-server": "tsc -p tsconfig.server.json",
+    "start:pvp-server": "node dist-server/server/index.js",
+    "test:pvp-server": "node --test --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs server/__tests__/*.test.ts",
     "preview": "vite preview --host 0.0.0.0"
   },
   "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^6.0.3",
     "vite": "^8.0.16"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
   }
 }
-

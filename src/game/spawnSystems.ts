@@ -18,6 +18,7 @@ export interface StarAttractorSpawnSystemInput {
   existingStarBeasts: readonly StarBeast[];
   currentTime: number;
   state: SpawnRuntimeState;
+  random?: () => number;
 }
 
 export interface BlackHoleSpawnSystemInput {
@@ -44,6 +45,7 @@ export interface StarBeastSpawnSystemInput {
   existingStarBeasts: StarBeast[];
   currentTime: number;
   state: SpawnRuntimeState;
+  random?: () => number;
 }
 
 export function advanceStarAttractorSpawnSystem(
@@ -162,6 +164,7 @@ export function refreshStarBeastSpawnSystem(input: StarBeastSpawnSystemInput): v
     existingBlackHoles: input.existingBlackHoles,
     existingStarBeasts: input.existingStarBeasts,
     currentTime: input.currentTime,
+    random: input.random,
   });
 
   if (nextStarBeast) {
@@ -188,6 +191,7 @@ function trySpawnStarAttractor(input: StarAttractorSpawnSystemInput): boolean {
     existingStarAttractors: input.existingStarAttractors,
     existingStarBeasts: input.existingStarBeasts,
     currentTime: input.currentTime,
+    random: input.random,
   });
 
   if (!nextStarAttractor) {

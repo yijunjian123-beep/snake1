@@ -30,6 +30,11 @@
             </button>
           </div>
 
+          <div class="hud-status" aria-label="运行状态">
+            <span id="build-version-label" class="hud-status__pill hud-status__pill--build">build dev</span>
+            <span id="pvp-connection-label" class="hud-status__pill hud-status__pill--pvp" data-state="disconnected">PVP disconnected</span>
+          </div>
+
           <div class="hud-cards" aria-label="当前信息">
             <section class="hud-card hud-card--length" aria-label="当前/目标长度">
               <span class="hud-card__label">当前/目标长度</span>
@@ -78,20 +83,44 @@
             <button id="pvp-button" class="mode-card mode-card--pvp" type="button" aria-label="进入 PVP 双蛇竞技">
               <span class="mode-card__eyebrow">PVP</span>
               <strong>双蛇竞技</strong>
-              <span>进入房间面板</span>
+              <span>默认自动匹配</span>
             </button>
           </div>
           <div id="pvp-room-panel" class="pvp-room-panel" hidden>
-            <div class="room-actions">
-              <button id="create-room-button" class="secondary-action" type="button">创建房间</button>
-              <label class="room-code-field">
-                <span>房间号</span>
-                <input id="room-code-input" type="text" inputmode="numeric" placeholder="等待接入" autocomplete="off" />
-              </label>
-              <button id="join-room-button" class="secondary-action" type="button">加入房间</button>
-              <button id="ready-room-button" class="secondary-action secondary-action--accent" type="button">准备</button>
+            <div id="room-queue-stats" class="room-stats" hidden>
+              <span id="queue-wait-label" class="room-stat"></span>
+              <span id="queue-online-label" class="room-stat"></span>
+              <span id="queue-count-label" class="room-stat"></span>
             </div>
-            <p id="room-status-label" class="room-status">联机房间服务将在下一步接入。</p>
+            <div class="room-actions">
+              <button
+                id="cancel-matchmaking-button"
+                class="secondary-action secondary-action--accent secondary-action--wide"
+                type="button"
+                hidden
+              >
+                取消匹配
+              </button>
+              <button id="create-room-button" class="secondary-action" type="button">邀请好友</button>
+              <button id="join-room-button" class="secondary-action" type="button">输入房间码</button>
+              <label id="room-code-field" class="room-code-field" hidden>
+                <span>房间码</span>
+                <input id="room-code-input" type="text" inputmode="text" placeholder="输入房间码" autocomplete="off" />
+              </label>
+              <button id="copy-room-code-button" class="secondary-action secondary-action--wide" type="button" hidden>
+                复制房间码
+              </button>
+              <button
+                id="ready-room-button"
+                class="secondary-action secondary-action--accent secondary-action--wide"
+                type="button"
+                hidden
+              >
+                准备
+              </button>
+            </div>
+            <p id="room-status-label" class="room-status">点击 PVP 后会自动连接服务并寻找对手。</p>
+            <p id="room-players-label" class="room-players" hidden></p>
             <button id="room-back-button" class="text-action" type="button">返回主界面</button>
           </div>
           <div id="settlement-actions" class="settlement-actions" hidden>
@@ -117,6 +146,11 @@
           <span id="state-label">Ready</span>
           <span id="fps-label">-- FPS</span>
           <span id="size-label">-- x --</span>
+          <span id="debug-local-tick-label" hidden></span>
+          <span id="debug-remote-input-lag-label" hidden></span>
+          <span id="debug-buffered-inputs-label" hidden></span>
+          <span id="debug-connection-state-label" hidden></span>
+          <span id="debug-player-slot-label" hidden></span>
         </aside>
 
         <div class="orientation-mask" role="status">

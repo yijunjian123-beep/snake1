@@ -138,6 +138,16 @@ export function createLocalPvpPlayers(phase: RunLifecycleState["phase"] = "ready
   ];
 }
 
+export function createOnlinePvpPlayers(
+  localPlayerId: PlayerId = "p1",
+  phase: RunLifecycleState["phase"] = "ready",
+): PlayerRuntimeState[] {
+  return [
+    createPlayerState("p1", "P1", localPlayerId === "p1" ? "local" : "remote", phase, 0),
+    createPlayerState("p2", "P2", localPlayerId === "p2" ? "local" : "remote", phase, 0),
+  ];
+}
+
 export function createSpawnState(): SpawnRuntimeState {
   return {
     starAttractorEatCount: 0,
@@ -162,6 +172,18 @@ export function createInputState(): InputRuntimeState {
     lastAppliedSequenceByPlayer: {
       p1: 0,
       p2: 0,
+    },
+    lastReceivedSequenceByPlayer: {
+      p1: 0,
+      p2: 0,
+    },
+    lastProcessedTickByPlayer: {
+      p1: -1,
+      p2: -1,
+    },
+    seenSequencesByPlayer: {
+      p1: new Set<number>(),
+      p2: new Set<number>(),
     },
     queue: [],
   };

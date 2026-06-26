@@ -1,5 +1,6 @@
 import { Game } from "../src/game/Game.ts";
 import type { GameUiElements, TouchControlElements } from "../src/game/types.ts";
+import type { PvpConnectionControllerOptions } from "../src/pvp/net/usePvpConnection.ts";
 
 type FakeRect = Readonly<{
   left: number;
@@ -107,6 +108,9 @@ class FakeElement extends EventTarget {
   public textContent = "";
   public hidden = false;
   public disabled = false;
+  public value = "";
+  public placeholder = "";
+  public readOnly = false;
   private readonly attributes = new Map<string, string>();
   private readonly rect: FakeRect;
   private readonly pointerCaptures = new Set<number>();
@@ -189,6 +193,7 @@ class FakeDocument {
 
 class FakeWindow extends EventTarget {
   public readonly localStorage = new FakeStorage();
+  public readonly sessionStorage = new FakeStorage();
   public readonly location: Location;
   public innerWidth: number;
   public innerHeight: number;
@@ -237,6 +242,8 @@ export function createGameUi(): GameUiElements {
   const root = new FakeElement({ left: 0, top: 0, width: 960, height: 540 });
   const hudStrip = new FakeElement({ left: 0, top: 16, width: 760, height: 183 });
   const startPanel = new FakeElement({ left: 0, top: 0, width: 320, height: 220 });
+  const buildVersionLabel = new FakeElement();
+  const pvpConnectionLabel = new FakeElement();
   const panelPrimaryLabel = new FakeElement();
   const panelPrimaryValue = new FakeElement();
   const panelSecondaryLabel = new FakeElement();
@@ -245,10 +252,18 @@ export function createGameUi(): GameUiElements {
   const pveButton = new FakeElement() as unknown as HTMLButtonElement;
   const pvpButton = new FakeElement() as unknown as HTMLButtonElement;
   const pvpRoomPanel = new FakeElement();
+  const roomQueueStats = new FakeElement();
+  const queueWaitLabel = new FakeElement();
+  const queueOnlineLabel = new FakeElement();
+  const queueCountLabel = new FakeElement();
+  const roomPlayersLabel = new FakeElement();
+  const roomCodeField = new FakeElement();
   const roomCodeInput = new FakeElement() as unknown as HTMLInputElement;
   const createRoomButton = new FakeElement() as unknown as HTMLButtonElement;
   const joinRoomButton = new FakeElement() as unknown as HTMLButtonElement;
   const readyRoomButton = new FakeElement() as unknown as HTMLButtonElement;
+  const cancelMatchmakingButton = new FakeElement() as unknown as HTMLButtonElement;
+  const copyRoomCodeButton = new FakeElement() as unknown as HTMLButtonElement;
   const roomBackButton = new FakeElement() as unknown as HTMLButtonElement;
   const roomStatusLabel = new FakeElement();
   const settlementActions = new FakeElement();
@@ -263,6 +278,11 @@ export function createGameUi(): GameUiElements {
   const stateLabel = new FakeElement();
   const fpsLabel = new FakeElement();
   const sizeLabel = new FakeElement();
+  const debugLocalTickLabel = new FakeElement();
+  const debugRemoteInputLagLabel = new FakeElement();
+  const debugBufferedInputsLabel = new FakeElement();
+  const debugConnectionStateLabel = new FakeElement();
+  const debugPlayerSlotLabel = new FakeElement();
   const startButton = new FakeElement() as unknown as HTMLButtonElement;
   const pauseButton = new FakeElement() as unknown as HTMLButtonElement;
   const container = createTouchControl("container");
@@ -271,9 +291,26 @@ export function createGameUi(): GameUiElements {
   const joystickLine = createTouchControl("line");
   const boostButton = createTouchControl("boost") as unknown as HTMLButtonElement;
 
+  entryActions.hidden = true;
+  pvpRoomPanel.hidden = true;
+  roomQueueStats.hidden = true;
+  roomPlayersLabel.hidden = true;
+  roomCodeField.hidden = true;
+  readyRoomButton.hidden = true;
+  cancelMatchmakingButton.hidden = true;
+  copyRoomCodeButton.hidden = true;
+  settlementActions.hidden = true;
+  debugLocalTickLabel.hidden = true;
+  debugRemoteInputLagLabel.hidden = true;
+  debugBufferedInputsLabel.hidden = true;
+  debugConnectionStateLabel.hidden = true;
+  debugPlayerSlotLabel.hidden = true;
+
   return {
     root: root as unknown as HTMLElement,
     hudStrip: hudStrip as unknown as HTMLElement,
+    buildVersionLabel: buildVersionLabel as unknown as HTMLElement,
+    pvpConnectionLabel: pvpConnectionLabel as unknown as HTMLElement,
     startPanel: startPanel as unknown as HTMLElement,
     panelPrimaryLabel: panelPrimaryLabel as unknown as HTMLElement,
     panelPrimaryValue: panelPrimaryValue as unknown as HTMLElement,
@@ -283,10 +320,18 @@ export function createGameUi(): GameUiElements {
     pveButton,
     pvpButton,
     pvpRoomPanel: pvpRoomPanel as unknown as HTMLElement,
+    roomQueueStats: roomQueueStats as unknown as HTMLElement,
+    queueWaitLabel: queueWaitLabel as unknown as HTMLElement,
+    queueOnlineLabel: queueOnlineLabel as unknown as HTMLElement,
+    queueCountLabel: queueCountLabel as unknown as HTMLElement,
+    roomPlayersLabel: roomPlayersLabel as unknown as HTMLElement,
+    roomCodeField: roomCodeField as unknown as HTMLElement,
     roomCodeInput,
     createRoomButton,
     joinRoomButton,
     readyRoomButton,
+    cancelMatchmakingButton,
+    copyRoomCodeButton,
     roomBackButton,
     roomStatusLabel: roomStatusLabel as unknown as HTMLElement,
     settlementActions: settlementActions as unknown as HTMLElement,
@@ -301,6 +346,11 @@ export function createGameUi(): GameUiElements {
     stateLabel: stateLabel as unknown as HTMLElement,
     fpsLabel: fpsLabel as unknown as HTMLElement,
     sizeLabel: sizeLabel as unknown as HTMLElement,
+    debugLocalTickLabel: debugLocalTickLabel as unknown as HTMLElement,
+    debugRemoteInputLagLabel: debugRemoteInputLagLabel as unknown as HTMLElement,
+    debugBufferedInputsLabel: debugBufferedInputsLabel as unknown as HTMLElement,
+    debugConnectionStateLabel: debugConnectionStateLabel as unknown as HTMLElement,
+    debugPlayerSlotLabel: debugPlayerSlotLabel as unknown as HTMLElement,
     startButton,
     pauseButton,
     touchControls: {
@@ -331,6 +381,11 @@ export interface GameHarness {
   ui: GameUiElements;
   window: FakeWindow;
   cleanup(): void;
+}
+
+export interface GameHarnessOptions {
+  search?: string;
+  pvpConnectionOptions?: Partial<PvpConnectionControllerOptions>;
 }
 
 function installWindow(fakeWindow: FakeWindow): () => void {
@@ -385,7 +440,7 @@ function installDocument(fakeDocument: FakeDocument): () => void {
   };
 }
 
-export function createGameHarness(options: { search?: string } = {}): GameHarness {
+export function createGameHarness(options: GameHarnessOptions = {}): GameHarness {
   const windowLike = new FakeWindow(960, 540, 1, options.search ?? "");
   const documentLike = new FakeDocument();
   const restoreWindow = installWindow(windowLike);
@@ -396,6 +451,7 @@ export function createGameHarness(options: { search?: string } = {}): GameHarnes
   const game = new Game({
     canvas: canvas as unknown as HTMLCanvasElement,
     ui,
+    pvpConnectionOptions: options.pvpConnectionOptions,
   });
 
   return {

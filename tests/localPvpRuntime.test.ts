@@ -22,15 +22,17 @@ type LocalPvpPlayerProbe = {
   };
 };
 
+type LocalPvpQueuedCommand = {
+  playerId: string;
+  tick: number;
+  action: string;
+  kind: string;
+  origin: string;
+  sequence: number;
+};
+
 type LocalPvpInputStateProbe = {
-  queue: Array<{
-    playerId: string;
-    tick: number;
-    action: string;
-    kind: string;
-    origin: string;
-    sequence: number;
-  }>;
+  queue: LocalPvpQueuedCommand[];
   lastAppliedSequenceByPlayer: {
     p1: number;
     p2: number;
@@ -72,7 +74,7 @@ test("local PVP mode creates two player snapshots and advances a shared tick", (
   }
 });
 
-test("PVP room shell shows unavailable room actions and returns to the main menu", () => {
+test("PVP room shows a service fallback state and returns to the main menu", () => {
   const harness = createGameHarness();
 
   try {
@@ -82,15 +84,8 @@ test("PVP room shell shows unavailable room actions and returns to the main menu
     assert.equal(harness.ui.root.dataset.shellView, "pvp-room");
     assert.equal(harness.ui.entryActions.hidden, true);
     assert.equal(harness.ui.pvpRoomPanel.hidden, false);
-    assert.equal(harness.ui.panelPrimaryValue.textContent, "PVP 房间");
-    assert.equal(harness.ui.roomStatusLabel.textContent, "联机房间服务将在下一步接入；当前不会创建真实房间。");
-
-    dispatchPointerUp(harness.ui.createRoomButton);
-
-    assert.equal(
-      harness.ui.roomStatusLabel.textContent,
-      "暂未接入房间服务：创建、加入和准备会在下一步真实房间 MVP 中实现。",
-    );
+    assert.equal(harness.ui.panelPrimaryValue.textContent, "在线 PVP 暂不可用");
+    assert.equal(harness.ui.roomStatusLabel.textContent, "在线 PVP 暂不可用，可以先玩单人模式");
 
     dispatchPointerUp(harness.ui.roomBackButton);
 
@@ -264,7 +259,6 @@ test("local PVP input commands enter the tick-addressed queue", () => {
 
   try {
     (internals.resetRun as (phase: "ready" | "playing" | "paused" | "gameOver") => void)("playing");
-    (internals.advanceLocalPvpTick as () => void)();
 
     const command: InputCommand = {
       action: "move-up",
@@ -298,7 +292,7 @@ test("local PVP input commands enter the tick-addressed queue", () => {
       origin: queued.origin,
     }, {
       playerId: "p1",
-      tick: 1,
+      tick: 0,
       action: "move-up",
       kind: "pressed",
       origin: "local",
@@ -341,6 +335,79 @@ test("local PVP keeps player input commands isolated by player id", () => {
     assert.equal(players[1]?.movement.isBoosting, true);
     assert.equal(inputState.lastAppliedSequenceByPlayer.p1, 1);
     assert.equal(inputState.lastAppliedSequenceByPlayer.p2, 2);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("local PVP drops duplicate input sequences before queueing them twice", () => {
+  const harness = createGameHarness({ search: "?localPvp=1" });
+  const internals = harness.game as unknown as Record<string, unknown>;
+
+  try {
+    (internals.resetRun as (phase: "ready" | "playing" | "paused" | "gameOver") => void)("playing");
+
+    const queueInput = internals.queuePlayerInputCommand as (command: LocalPvpQueuedCommand) => boolean;
+    const firstAccepted = queueInput.call(harness.game, {
+      playerId: "p1",
+      tick: 1,
+      action: "boost",
+      kind: "pressed",
+      origin: "remote",
+      sequence: 7,
+    });
+    const secondAccepted = queueInput.call(harness.game, {
+      playerId: "p1",
+      tick: 2,
+      action: "boost",
+      kind: "released",
+      origin: "remote",
+      sequence: 7,
+    });
+    const inputState = internals.inputState as LocalPvpInputStateProbe;
+
+    assert.equal(firstAccepted, true);
+    assert.equal(secondAccepted, false);
+    assert.equal(inputState.queue.length, 1);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("local PVP applies queued input in tick order even when seq numbers are reversed", () => {
+  const harness = createGameHarness({ search: "?localPvp=1" });
+  const internals = harness.game as unknown as Record<string, unknown>;
+
+  try {
+    (internals.resetRun as (phase: "ready" | "playing" | "paused" | "gameOver") => void)("playing");
+
+    const players = internals.players as LocalPvpPlayerProbe[];
+    const inputState = internals.inputState as LocalPvpInputStateProbe;
+
+    players[0]!.movement.isBoosting = false;
+    inputState.queue = [
+      {
+        playerId: "p1",
+        tick: 1,
+        action: "boost",
+        kind: "released",
+        origin: "remote",
+        sequence: 2,
+      },
+      {
+        playerId: "p1",
+        tick: 2,
+        action: "boost",
+        kind: "pressed",
+        origin: "remote",
+        sequence: 1,
+      },
+    ];
+
+    (internals.applyQueuedInputCommandsForTick as (tick: number) => void)(2);
+
+    assert.equal(players[0]?.movement.isBoosting, true);
+    assert.equal(inputState.lastAppliedSequenceByPlayer.p1, 2);
   } finally {
     harness.cleanup();
   }
@@ -406,7 +473,7 @@ test("local PVP simultaneous player deaths resolve the match as a draw", () => {
     assert.equal(snapshot.phase, "gameOver");
     assert.equal(snapshot.match.phase, "gameOver");
     assert.equal(snapshot.match.winnerId, null);
-    assert.deepEqual(snapshot.players.map((player) => player.deathReason), ["snake_body", "snake_body"]);
+    assert.deepEqual(snapshot.players.map((player) => player.deathReason), ["head_to_head", "head_to_head"]);
     assert.deepEqual(snapshot.players.map((player) => player.score), [0, 0]);
     assert.equal(snapshot.foods.length, 1);
   } finally {

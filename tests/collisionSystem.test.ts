@@ -226,11 +226,11 @@ test("multiplayer collision resolution detects head-to-head collisions", () => {
   assert.deepEqual(results.map((result) => result.collision), [
     {
       kind: "death",
-      reason: "snake_body",
+      reason: "head_to_head",
     },
     {
       kind: "death",
-      reason: "snake_body",
+      reason: "head_to_head",
     },
   ]);
 });

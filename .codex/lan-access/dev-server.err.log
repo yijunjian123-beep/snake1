@@ -259,3 +259,32 @@
       at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
       at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
       at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)
+[2m00:17:20[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mExpected `=>` but found `{`
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/pvp/net/usePvpConnection.ts:582:82 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m582 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m([0m[38;5;249mm[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249ma[0m[38;5;249mg[0m[38;5;249me[0m[38;5;249m:[0m[38;5;249m [0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mc[0m[38;5;249mt[0m[38;5;249m<[0m[38;5;249mS[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249mv[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249mT[0m[38;5;249mo[0m[38;5;249mC[0m[38;5;249ml[0m[38;5;249mi[0m[38;5;249me[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249mM[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249ma[0m[38;5;249mg[0m[38;5;249me[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ma[0m[38;5;249md[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ml[0m[38;5;249my[0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m:[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249mw[0m[38;5;249me[0m[38;5;249ml[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249me[0m[38;5;249m"[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m>[0m[38;5;249m)[0m[38;5;249m:[0m[38;5;249m [0m[38;5;249mv[0m[38;5;249mo[0m[38;5;249mi[0m[38;5;249md[0m[38;5;249m [0m{
+ [38;5;240m    │[0m                                                                                  ┬  
+ [38;5;240m    │[0m                                                                                  ╰── `=>` expected
+[38;5;246m─────╯[0m
+
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/pvp/net/usePvpConnection.ts[39m
+[2m00:17:20[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mExpected `=>` but found `{`
+     [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/pvp/net/usePvpConnection.ts:582:82 [38;5;246m][0m
+     [38;5;246m│[0m
+ [38;5;246m582 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m([0m[38;5;249mm[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249ma[0m[38;5;249mg[0m[38;5;249me[0m[38;5;249m:[0m[38;5;249m [0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mt[0m[38;5;249mr[0m[38;5;249ma[0m[38;5;249mc[0m[38;5;249mt[0m[38;5;249m<[0m[38;5;249mS[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249mv[0m[38;5;249me[0m[38;5;249mr[0m[38;5;249mT[0m[38;5;249mo[0m[38;5;249mC[0m[38;5;249ml[0m[38;5;249mi[0m[38;5;249me[0m[38;5;249mn[0m[38;5;249mt[0m[38;5;249mM[0m[38;5;249me[0m[38;5;249ms[0m[38;5;249ms[0m[38;5;249ma[0m[38;5;249mg[0m[38;5;249me[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249mr[0m[38;5;249me[0m[38;5;249ma[0m[38;5;249md[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ml[0m[38;5;249my[0m[38;5;249m [0m[38;5;249mt[0m[38;5;249my[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249m:[0m[38;5;249m [0m[38;5;249m"[0m[38;5;249mw[0m[38;5;249me[0m[38;5;249ml[0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mm[0m[38;5;249me[0m[38;5;249m"[0m[38;5;249m [0m[38;5;249m}[0m[38;5;249m>[0m[38;5;249m)[0m[38;5;249m:[0m[38;5;249m [0m[38;5;249mv[0m[38;5;249mo[0m[38;5;249mi[0m[38;5;249md[0m[38;5;249m [0m{
+ [38;5;240m    │[0m                                                                                  ┬  
+ [38;5;240m    │[0m                                                                                  ╰── `=>` expected
+[38;5;246m─────╯[0m
+[39m
+  Plugin: [35mvite:oxc[39m
+  File: [36mS:/project/snake1/src/pvp/net/usePvpConnection.ts[39m
+      at transformWithOxc (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3344:19)
+      at TransformPluginContext.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:3415:26)
+      at EnvironmentPluginContainer.transform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:30387:51)
+      at async loadAndTransform (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24646:26)
+      at async viteTransformMiddleware (file:///S:/project/snake1/node_modules/.pnpm/vite@8.0.16/node_modules/vite/dist/node/chunks/node.js:24440:20)

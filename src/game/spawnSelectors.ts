@@ -1,5 +1,5 @@
-import type { SafeSpawnZone } from "./progression";
-import type { GridCell, StarAttractor, StarBeast, StarCore } from "./types";
+import type { SafeSpawnZone } from "./progression.js";
+import type { GridCell, StarAttractor, StarBeast, StarCore } from "./types.js";
 
 export interface BlackHoleSpawnBlockedCellsInput {
   starBeasts: readonly StarBeast[];

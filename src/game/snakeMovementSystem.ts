@@ -1,7 +1,7 @@
-import { DIRECTION_DELTAS } from "./direction";
-import type { SnakeAdvanceEvaluation } from "./gameState";
-import { cellIndex, cellsMatch, getCellIndex, isInsideGrid } from "./gridMath";
-import type { Direction, GridCell, GridMetrics, StarAttractor, StarCore } from "./types";
+import { DIRECTION_DELTAS } from "./direction.js";
+import type { SnakeAdvanceEvaluation } from "./gameState.js";
+import { cellIndex, cellsMatch, getCellIndex, isInsideGrid } from "./gridMath.js";
+import type { Direction, GridCell, GridMetrics, StarAttractor, StarCore } from "./types.js";
 
 export interface SnakeMovementEvaluationContext {
   grid: GridMetrics;

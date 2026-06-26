@@ -1,8 +1,8 @@
-import { findStage0SafeSpawnPosition } from "./spawn";
-import { OPPOSITE_DIRECTIONS, PERPENDICULAR_PAIRS } from "./direction";
-import { cellKey, chebyshevDistance, isCellInsideZone, isInsideGrid } from "./gridMath";
-import type { GameProgress, SafeSpawnZone } from "./progression";
-import type { BlackHole, BlackHoleAlert, BlackHoleBand, BlackHoleCue, BlackHoleKind, Direction, GridCell, GridMetrics } from "./types";
+import { findStage0SafeSpawnPosition } from "./spawn.js";
+import { OPPOSITE_DIRECTIONS, PERPENDICULAR_PAIRS } from "./direction.js";
+import { cellKey, chebyshevDistance, isCellInsideZone, isInsideGrid } from "./gridMath.js";
+import type { GameProgress, SafeSpawnZone } from "./progression.js";
+import type { BlackHole, BlackHoleAlert, BlackHoleBand, BlackHoleCue, BlackHoleKind, Direction, GridCell, GridMetrics } from "./types.js";
 
 export interface BlackHoleVariant {
   bodyRadiusCells: number;

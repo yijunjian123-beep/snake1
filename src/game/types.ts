@@ -10,7 +10,7 @@ export type StarBeastState = "spawning" | "patrol" | "chase" | "dead";
 
 export type StarBeastDeathCause = "player_body" | "black_hole";
 
-export type DeathReason = "wall" | "snake_body" | "black_hole" | "star_beast" | "unknown";
+export type DeathReason = "wall" | "snake_body" | "head_to_head" | "black_hole" | "star_beast" | "unknown";
 
 export type InputSource = "keyboard" | "pointer";
 
@@ -22,7 +22,7 @@ export type SpeedCueMode = Exclude<SpeedMode, "base">;
 
 export type PlayerId = "p1" | "p2";
 
-export type MatchMode = "solo" | "local-pvp";
+export type MatchMode = "solo" | "local-pvp" | "online-pvp";
 
 export type ShellView = "main-menu" | "pvp-room" | "active-run";
 
@@ -266,6 +266,8 @@ export interface Renderer {
 export interface GameUiElements {
   root: HTMLElement;
   hudStrip: HTMLElement;
+  buildVersionLabel: HTMLElement;
+  pvpConnectionLabel: HTMLElement;
   startPanel: HTMLElement;
   panelPrimaryLabel: HTMLElement;
   panelPrimaryValue: HTMLElement;
@@ -275,10 +277,18 @@ export interface GameUiElements {
   pveButton: HTMLButtonElement;
   pvpButton: HTMLButtonElement;
   pvpRoomPanel: HTMLElement;
+  roomQueueStats: HTMLElement;
+  queueWaitLabel: HTMLElement;
+  queueOnlineLabel: HTMLElement;
+  queueCountLabel: HTMLElement;
+  roomPlayersLabel: HTMLElement;
+  roomCodeField: HTMLElement;
   roomCodeInput: HTMLInputElement;
   createRoomButton: HTMLButtonElement;
   joinRoomButton: HTMLButtonElement;
   readyRoomButton: HTMLButtonElement;
+  cancelMatchmakingButton: HTMLButtonElement;
+  copyRoomCodeButton: HTMLButtonElement;
   roomBackButton: HTMLButtonElement;
   roomStatusLabel: HTMLElement;
   settlementActions: HTMLElement;
@@ -293,6 +303,11 @@ export interface GameUiElements {
   stateLabel: HTMLElement;
   fpsLabel: HTMLElement;
   sizeLabel: HTMLElement;
+  debugLocalTickLabel: HTMLElement;
+  debugRemoteInputLagLabel: HTMLElement;
+  debugBufferedInputsLabel: HTMLElement;
+  debugConnectionStateLabel: HTMLElement;
+  debugPlayerSlotLabel: HTMLElement;
   startButton: HTMLButtonElement;
   pauseButton: HTMLButtonElement;
   touchControls: TouchControlElements;

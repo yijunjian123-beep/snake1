@@ -1,7 +1,7 @@
-import { isBlackHoleCollision } from "./blackHole";
-import type { SnakeAdvanceEvaluation } from "./gameState";
-import { cellIndex, cellsMatch, isInsideGrid } from "./gridMath";
-import type { BlackHole, DeathReason, Direction, GridCell, GridMetrics, PlayerId, StarBeast } from "./types";
+import { isBlackHoleCollision } from "./blackHole.js";
+import type { SnakeAdvanceEvaluation } from "./gameState.js";
+import { cellIndex, cellsMatch, isInsideGrid } from "./gridMath.js";
+import type { BlackHole, DeathReason, Direction, GridCell, GridMetrics, PlayerId, StarBeast } from "./types.js";
 
 export type SnakeCollisionResolution =
   | { kind: "none" }
@@ -184,14 +184,14 @@ function markHeadToHeadCollisions(
         ...results[leftResultIndex]!,
         collision: {
           kind: "death",
-          reason: "snake_body",
+          reason: "head_to_head",
         },
       };
       results[rightResultIndex] = {
         ...results[rightResultIndex]!,
         collision: {
           kind: "death",
-          reason: "snake_body",
+          reason: "head_to_head",
         },
       };
     }

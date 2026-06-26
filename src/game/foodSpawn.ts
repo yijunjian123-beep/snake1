@@ -1,9 +1,9 @@
-import { getBlackHoleFoodAvoidRadiusCells } from "./blackHole";
-import { type FoodWaveKind } from "./gameState";
-import { cellKey, chebyshevDistance } from "./gridMath";
-import { DEFAULT_SAFE_SPAWN_CONFIG } from "./progression";
-import { findSafeSpawnPosition } from "./spawn";
-import type { BlackHole, GridCell, GridMetrics } from "./types";
+import { getBlackHoleFoodAvoidRadiusCells } from "./blackHole.js";
+import { type FoodWaveKind } from "./gameState.js";
+import { cellKey, chebyshevDistance } from "./gridMath.js";
+import { DEFAULT_SAFE_SPAWN_CONFIG } from "./progression.js";
+import { findSafeSpawnPosition } from "./spawn.js";
+import type { BlackHole, GridCell, GridMetrics } from "./types.js";
 
 export const FOOD_SPAWN_CONFIG = {
   normalCap: 10,
