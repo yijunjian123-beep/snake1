@@ -915,6 +915,28 @@ test("room_full is returned when trying to join a full private room", async () =
   }
 });
 
+test("room_not_found is returned when joining a missing private room", async () => {
+  const server = await startTestServer();
+
+  try {
+    const client = await openSocket(server.port);
+    await client.readMessage();
+
+    client.socket.send(JSON.stringify({ type: "joinRoom", roomCode: "AB12CD" }));
+    const error = await readUntilType(client, "error");
+
+    assert.deepEqual(error, {
+      type: "error",
+      code: "room_not_found",
+      message: "The private room could not be found",
+    });
+
+    await closeSocket(client.socket);
+  } finally {
+    await server.runtime.close();
+  }
+});
+
 test("disconnect during countdown returns the room to waiting and notifies the opponent", async () => {
   const server = await startTestServer({ countdownMs: 100 });
 

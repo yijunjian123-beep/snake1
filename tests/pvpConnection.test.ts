@@ -648,6 +648,94 @@ test("join room flow can submit a room code", () => {
   }
 });
 
+test("join room input normalizes pasted characters before connecting", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const controller = createPvpConnectionController({
+    url: "ws://example.test/ws",
+    socketFactory: socketHarness.factory,
+  });
+
+  try {
+    controller.openJoinRoomEntry();
+    controller.updateJoinCode(" ab-12 cd! ");
+
+    assert.equal(controller.getState().joinCode, "AB12CD");
+    assert.equal(controller.getPanelState().joinRoomButtonDisabled, false);
+
+    controller.joinPrivateRoom();
+
+    assert.equal(socketHarness.sockets.length, 1);
+
+    const socket = socketHarness.sockets[0];
+
+    assert.ok(socket);
+    socket.emitOpen();
+    socket.emitServerMessage(createWelcomeMessage());
+
+    assert.deepEqual(getLastClientMessage(socket), {
+      type: "joinRoom",
+      roomCode: "AB12CD",
+    });
+  } finally {
+    controller.destroy();
+  }
+});
+
+test("short room codes stay disabled and do not open a join request", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const controller = createPvpConnectionController({
+    url: "ws://example.test/ws",
+    socketFactory: socketHarness.factory,
+  });
+
+  try {
+    controller.openJoinRoomEntry();
+    controller.updateJoinCode(" a-1 ");
+
+    assert.equal(controller.getState().joinCode, "A1");
+    assert.equal(controller.getPanelState().joinRoomButtonDisabled, true);
+
+    controller.joinPrivateRoom();
+
+    assert.equal(socketHarness.sockets.length, 0);
+    assert.equal(controller.getState().status, "error");
+    assert.match(controller.getPanelState().statusText, /4-8/);
+  } finally {
+    controller.destroy();
+  }
+});
+
+test("room_not_found maps to a clear Chinese message", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const controller = createPvpConnectionController({
+    url: "ws://example.test/ws",
+    socketFactory: socketHarness.factory,
+  });
+
+  try {
+    controller.openJoinRoomEntry();
+    controller.updateJoinCode("AB12CD");
+    controller.joinPrivateRoom();
+
+    const socket = socketHarness.sockets[0];
+
+    assert.ok(socket);
+    socket.emitOpen();
+    socket.emitServerMessage(createWelcomeMessage());
+    socket.emitServerMessage({
+      type: "error",
+      code: "room_not_found",
+      message: "The private room could not be found",
+    });
+
+    assert.equal(controller.getState().status, "error");
+    assert.equal(controller.getState().errorCode, "room_not_found");
+    assert.equal(controller.getPanelState().statusText, "未找到对应房间码");
+  } finally {
+    controller.destroy();
+  }
+});
+
 test("queue full errors map to a clear Chinese message", () => {
   const socketHarness = new FakeSocketFactoryHarness();
   const controller = createPvpConnectionController({
