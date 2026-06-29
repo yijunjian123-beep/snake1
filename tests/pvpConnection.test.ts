@@ -37,6 +37,7 @@ function createRoomPlayers(players: readonly Partial<PvpRoomPlayer>[]): readonly
 class FakeSocket implements WebSocketLike {
   public readyState = 0;
   public readonly sent: string[] = [];
+  public emitCloseOnClose = true;
   private readonly openListeners = new Set<() => void>();
   private readonly messageListeners = new Set<(event: WebSocketMessageEventLike) => void>();
   private readonly errorListeners = new Set<() => void>();
@@ -48,6 +49,10 @@ class FakeSocket implements WebSocketLike {
 
   public close(code = 1000, reason = "client_close"): void {
     this.readyState = 3;
+    if (!this.emitCloseOnClose) {
+      return;
+    }
+
     this.emitClose({ code, reason, wasClean: true });
   }
 
@@ -353,6 +358,11 @@ test("clicking PVP auto connects, joins matchmaking, and hands off on gameStart"
     assert.equal(socketHarness.urls[0], "ws://example.test/ws");
     assert.equal(harness.ui.root.dataset.shellView, "pvp-room");
     assert.equal(harness.ui.panelPrimaryValue.textContent, "正在连接 PVP 服务");
+    assert.equal(harness.ui.pvpSoloButton.textContent, "单人模式");
+    assert.equal(harness.ui.createRoomButton.textContent, "创建房间");
+    assert.equal(harness.ui.joinRoomButton.textContent, "加入房间");
+    assert.equal(harness.ui.randomMatchButton.textContent, "随机匹配中");
+    assert.equal(harness.ui.randomMatchButton.disabled, true);
     assert.equal(harness.ui.roomCodeField.hidden, true);
     assert.equal(harness.ui.readyRoomButton.hidden, true);
 
@@ -444,6 +454,46 @@ test("cancel matchmaking sends matchmakingCancel and keeps the PVP hall visible"
     assert.equal(harness.ui.root.dataset.shellView, "pvp-room");
     assert.equal(harness.ui.panelPrimaryValue.textContent, "已取消匹配");
     assert.equal(harness.ui.roomStatusLabel.textContent, "可以重新匹配，或改走房间码入口");
+    assert.equal(harness.ui.randomMatchButton.textContent, "随机匹配");
+    assert.equal(harness.ui.randomMatchButton.disabled, false);
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("PVP hall solo entry starts PVE when the service is unavailable", () => {
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: null,
+    },
+  });
+
+  try {
+    harness.game.start();
+    dispatchPointerUp(harness.ui.pvpButton);
+
+    assert.equal(harness.ui.panelPrimaryValue.textContent, "在线 PVP 暂不可用");
+    (harness.game as unknown as {
+      audio: {
+        unlock(): void;
+      playUiPulse(): void;
+      destroy(): void;
+    };
+  }).audio = {
+      unlock(): void {
+        // No-op.
+      },
+      playUiPulse(): void {
+        // No-op.
+      },
+      destroy(): void {
+        // No-op.
+      },
+    };
+    dispatchPointerUp(harness.ui.pvpSoloButton);
+
+    assert.equal(harness.ui.root.dataset.shellView, "active-run");
+    assert.equal(harness.ui.root.dataset.phase, "playing");
   } finally {
     harness.cleanup();
   }
@@ -494,6 +544,52 @@ test("invite friend flow can create a private room", () => {
     assert.equal(harness.ui.copyRoomCodeButton.hidden, false);
     assert.equal(harness.ui.roomPlayersLabel.hidden, false);
     assert.equal(harness.ui.roomPlayersLabel.textContent, "你 已连接，等待好友加入");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("switching from auto matchmaking to invite ignores the old socket close", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: "ws://example.test/ws",
+      socketFactory: socketHarness.factory,
+    },
+  });
+
+  try {
+    harness.game.start();
+    dispatchPointerUp(harness.ui.pvpButton);
+
+    const matchmakingSocket = socketHarness.sockets[0];
+
+    assert.ok(matchmakingSocket);
+    matchmakingSocket.emitCloseOnClose = false;
+    matchmakingSocket.emitOpen();
+    matchmakingSocket.emitServerMessage(createWelcomeMessage());
+
+    assert.deepEqual(getLastClientMessage(matchmakingSocket), { type: "matchmakingJoin" });
+
+    dispatchPointerUp(harness.ui.createRoomButton);
+
+    const inviteSocket = socketHarness.sockets[1];
+
+    assert.ok(inviteSocket);
+    matchmakingSocket.emitClose({ code: 1000, reason: "client_close", wasClean: true });
+    inviteSocket.emitOpen();
+    inviteSocket.emitServerMessage(createWelcomeMessage());
+
+    assert.deepEqual(getLastClientMessage(inviteSocket), { type: "createRoom" });
+
+    inviteSocket.emitServerMessage({
+      type: "roomCreated",
+      roomCode: "ZX12CV",
+      playerSlot: "p1",
+    });
+
+    assert.equal(harness.ui.panelPrimaryValue.textContent, "邀请好友");
+    assert.equal(harness.ui.roomCodeInput.value, "ZX12CV");
   } finally {
     harness.cleanup();
   }
@@ -574,7 +670,7 @@ test("queue full errors map to a clear Chinese message", () => {
     });
 
     assert.equal(controller.getState().status, "error");
-    assert.equal(controller.getPanelState().statusText, "匹配队列已满，请稍后再试");
+    assert.equal(controller.getPanelState().statusText, "当前在线人数较多，请稍后再试");
   } finally {
     controller.destroy();
   }
@@ -602,7 +698,28 @@ test("room capacity errors map to a clear Chinese message", () => {
     });
 
     assert.equal(controller.getState().status, "error");
-    assert.equal(controller.getPanelState().statusText, "房间服务繁忙，请稍后再试");
+    assert.equal(controller.getPanelState().statusText, "当前在线人数较多，请稍后再试");
+  } finally {
+    controller.destroy();
+  }
+});
+
+test("connection timeout exits loading with the PVP unavailable message", async () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const controller = createPvpConnectionController({
+    url: "ws://example.test/ws",
+    socketFactory: socketHarness.factory,
+    connectTimeoutMs: 5,
+  });
+
+  try {
+    controller.enterMatchmaking();
+    assert.equal(controller.getState().status, "connecting");
+
+    await new Promise((resolve) => setTimeout(resolve, 15));
+
+    assert.equal(controller.getState().status, "error");
+    assert.equal(controller.getPanelState().statusText, "在线 PVP 暂不可用，可以先玩单人模式");
   } finally {
     controller.destroy();
   }
@@ -759,7 +876,7 @@ test("server snapshots flag mismatches and server gameOver overrides local predi
       alive: { p1: true, p2: true },
     });
 
-    assert.match(harness.ui.panelMetaLabel.textContent, /同步修正 tick 1/);
+    assert.equal(harness.ui.panelMetaLabel.textContent, "已按服务端同步修正");
 
     socket.emitServerMessage({
       type: "gameOver",
@@ -772,6 +889,70 @@ test("server snapshots flag mismatches and server gameOver overrides local predi
 
     assert.equal(snapshot.match.phase, "gameOver");
     assert.equal(snapshot.match.winnerId, "p2");
+    assert.equal(harness.ui.continueButton.textContent, "再来一局");
+    assert.equal(harness.ui.mainMenuButton.textContent, "返回大厅");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("online PVP settlement can rematch or return to the PVP hall", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: "ws://example.test/ws",
+      socketFactory: socketHarness.factory,
+    },
+  });
+
+  try {
+    const firstSocket = bootOnlinePvpHarness(harness, socketHarness, "p1");
+
+    firstSocket.emitServerMessage({
+      type: "gameOver",
+      winner: "p1",
+      reason: "opponent_disconnected",
+      finalTick: 12,
+    });
+
+    assert.equal(harness.ui.root.dataset.phase, "gameOver");
+    assert.equal(harness.ui.continueButton.textContent, "再来一局");
+    dispatchPointerUp(harness.ui.continueButton);
+
+    const rematchSocket = socketHarness.sockets[1];
+
+    assert.ok(rematchSocket);
+    assert.equal(harness.ui.root.dataset.shellView, "pvp-room");
+    rematchSocket.emitOpen();
+    rematchSocket.emitServerMessage(createWelcomeMessage());
+    assert.deepEqual(getLastClientMessage(rematchSocket), { type: "matchmakingJoin" });
+
+    rematchSocket.emitServerMessage({
+      type: "matchFound",
+      roomCode: "CD34EF",
+      playerSlot: "p1",
+    });
+    rematchSocket.emitServerMessage({
+      type: "gameStart",
+      seed: 9,
+      startTick: 0,
+      tickRate: 20,
+      playerSlots: ["p1", "p2"],
+      inputDelayTicks: 2,
+    });
+    rematchSocket.emitServerMessage({
+      type: "gameOver",
+      winner: "p2",
+      reason: "wall",
+      finalTick: 3,
+    });
+
+    dispatchPointerUp(harness.ui.mainMenuButton);
+
+    assert.equal(harness.ui.root.dataset.shellView, "pvp-room");
+    assert.equal(harness.ui.root.dataset.phase, "ready");
+    assert.equal(harness.ui.randomMatchButton.disabled, false);
+    assert.equal(harness.ui.roomStatusLabel.textContent, "选择单人模式、创建房间、加入房间，或随机匹配。");
   } finally {
     harness.cleanup();
   }
@@ -1022,6 +1203,106 @@ test("playing disconnect reconnects with the stored session token and restores t
   }
 });
 
+test("game startup resumes a stored online PVP session", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const sessionStorage = new MemoryStorage();
+
+  sessionStorage.setItem(PVP_SESSION_TOKEN_STORAGE_KEY, "session-token_1");
+
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: "ws://example.test/ws",
+      socketFactory: socketHarness.factory,
+      sessionStorage,
+    },
+  });
+
+  try {
+    harness.game.start();
+
+    const socket = socketHarness.sockets[0];
+
+    assert.ok(socket);
+    assert.equal(harness.ui.root.dataset.shellView, "pvp-room");
+    assert.equal(harness.ui.panelPrimaryValue.textContent, "正在连接 PVP 服务");
+
+    socket.emitOpen();
+    socket.emitServerMessage(createWelcomeMessage());
+
+    assert.deepEqual(getLastClientMessage(socket), {
+      type: "hello",
+      clientVersion: "0.1.0",
+      sessionToken: "session-token_1",
+    });
+
+    socket.emitServerMessage({
+      type: "reconnectResult",
+      ok: true,
+      roomCode: "AB12",
+      playerSlot: "p1",
+      phase: "playing",
+    });
+    socket.emitServerMessage({
+      type: "gameStart",
+      seed: 7,
+      startTick: 0,
+      tickRate: 20,
+      playerSlots: ["p1", "p2"],
+      inputDelayTicks: 2,
+    });
+
+    assert.equal(harness.ui.root.dataset.shellView, "active-run");
+    assert.equal(harness.ui.root.dataset.phase, "playing");
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("game startup can recover a finished online PVP settlement", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const sessionStorage = new MemoryStorage();
+
+  sessionStorage.setItem(PVP_SESSION_TOKEN_STORAGE_KEY, "session-token_1");
+
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: "ws://example.test/ws",
+      socketFactory: socketHarness.factory,
+      sessionStorage,
+    },
+  });
+
+  try {
+    harness.game.start();
+
+    const socket = socketHarness.sockets[0];
+
+    assert.ok(socket);
+    socket.emitOpen();
+    socket.emitServerMessage(createWelcomeMessage());
+    socket.emitServerMessage({
+      type: "reconnectResult",
+      ok: true,
+      roomCode: "AB12",
+      playerSlot: "p1",
+      phase: "finished",
+    });
+    socket.emitServerMessage({
+      type: "gameOver",
+      winner: "p2",
+      reason: "opponent_disconnected",
+      finalTick: 12,
+    });
+
+    assert.equal(harness.ui.root.dataset.shellView, "active-run");
+    assert.equal(harness.ui.root.dataset.phase, "gameOver");
+    assert.equal(harness.ui.panelSecondaryLabel.textContent, "P2 获胜");
+    assert.equal(harness.ui.roomStatusLabel.textContent, "你已断线，对手获胜");
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("service_busy maps to a clear Chinese message", () => {
   const socketHarness = new FakeSocketFactoryHarness();
   const controller = createPvpConnectionController({
@@ -1044,7 +1325,35 @@ test("service_busy maps to a clear Chinese message", () => {
     });
 
     assert.equal(controller.getState().status, "error");
-    assert.equal(controller.getPanelState().statusText, "房间服务繁忙，请稍后再试");
+    assert.equal(controller.getPanelState().statusText, "当前在线人数较多，请稍后再试");
+  } finally {
+    controller.destroy();
+  }
+});
+
+test("capacity_reached maps to a clear Chinese message", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const controller = createPvpConnectionController({
+    url: "ws://example.test/ws",
+    socketFactory: socketHarness.factory,
+  });
+
+  try {
+    controller.enterMatchmaking();
+
+    const socket = socketHarness.sockets[0];
+
+    assert.ok(socket);
+    socket.emitOpen();
+    socket.emitServerMessage(createWelcomeMessage());
+    socket.emitServerMessage({
+      type: "error",
+      code: "capacity_reached",
+      message: "PVP server is busy",
+    });
+
+    assert.equal(controller.getState().status, "error");
+    assert.equal(controller.getPanelState().statusText, "当前在线人数较多，请稍后再试");
   } finally {
     controller.destroy();
   }

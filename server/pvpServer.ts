@@ -160,14 +160,14 @@ export function createPvpServer(config: PvpServerConfig): PvpServerRuntime {
       wsServer.handleUpgrade(request, socket, head, (webSocket) => {
         sendServerMessage(webSocket, {
           type: "error",
-          code: "service_busy",
+          code: "capacity_reached",
           message: "PVP server is busy",
         });
         logServerEvent("error", {
-          errorCode: "service_busy",
+          errorCode: "capacity_reached",
           phase: "connecting",
         });
-        webSocket.close(1013, "service_busy");
+        webSocket.close(1013, "capacity_reached");
       });
       return;
     }
@@ -545,7 +545,7 @@ function handleJoinPrivateRoom(connection: PvpConnection, roomCode: string, cont
     players: toProtocolRoomPlayers(result.room.players),
   });
 
-  startRoomCountdown(result.room.roomId, context);
+  broadcastRoomState(result.room, context);
 }
 
 function handleLeaveRoom(connection: PvpConnection, context: RuntimeContext): void {
@@ -928,20 +928,7 @@ function handleDisconnectedRoomDeparture(connection: PvpConnection, context: Run
         return;
       }
 
-      const winner = room.players.find((player) => player.connected);
-
-      if (winner === undefined) {
-        context.rooms.destroyRoom(roomId);
-        return;
-      }
-
-      const finalTick = room.gameState?.match.tick ?? room.startTick;
-      finalizePlayingRoom(roomId, context, {
-        type: "gameOver",
-        winner: winner.playerSlot,
-        reason: "opponent_disconnected",
-        finalTick,
-      });
+      broadcastRoomState(room, context);
       return;
     }
     case "finished":
@@ -1041,6 +1028,7 @@ function restoreSessionRoomState(connection: PvpConnection, context: RuntimeCont
       return;
     case "playing":
       setConnectionRoomState(connection, room, "playing");
+      broadcastRoomState(room, context);
       if (room.gameState !== undefined) {
         sendIfOpen(connection.socket, {
           type: "gameStart",
@@ -1200,6 +1188,10 @@ function advancePlayingRoom(roomId: string, context: RuntimeContext): void {
     return;
   }
 
+  if (countConnectedRoomPlayers(room.players) < room.players.length) {
+    return;
+  }
+
   const result = advancePvpTick(room.gameState);
   room.lastSnapshot = {
     type: "snapshot",
@@ -1314,8 +1306,57 @@ function sweepExpiredRooms(context: RuntimeContext): void {
     }
   }
 
+  sweepPlayingReconnectTimeouts(context, now);
+
   for (const connection of context.connections.getExpired(now, context.config.reconnectGraceMs)) {
     context.connections.remove(connection);
+  }
+}
+
+function sweepPlayingReconnectTimeouts(context: RuntimeContext, now: number): void {
+  for (const room of context.rooms.values()) {
+    if (room.phase !== "playing") {
+      continue;
+    }
+
+    const connectedPlayers = room.players.filter((player) => player.connected);
+
+    if (connectedPlayers.length === room.players.length) {
+      continue;
+    }
+
+    if (connectedPlayers.length === 0) {
+      context.rooms.destroyRoom(room.roomId);
+      continue;
+    }
+
+    const timedOut = room.players
+      .filter((player) => !player.connected)
+      .some((player) => {
+        const connection = context.connections.get(player.playerId);
+        return connection?.disconnectedAt !== null
+          && connection?.disconnectedAt !== undefined
+          && now - connection.disconnectedAt >= context.config.reconnectGraceMs;
+      });
+
+    if (!timedOut) {
+      continue;
+    }
+
+    const winner = connectedPlayers[0];
+
+    if (winner === undefined) {
+      context.rooms.destroyRoom(room.roomId);
+      continue;
+    }
+
+    const finalTick = room.gameState?.match.tick ?? room.startTick;
+    finalizePlayingRoom(room.roomId, context, {
+      type: "gameOver",
+      winner: winner.playerSlot,
+      reason: "opponent_disconnected",
+      finalTick,
+    });
   }
 }
 

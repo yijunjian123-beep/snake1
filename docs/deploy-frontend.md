@@ -22,6 +22,14 @@ workflow 至少执行这些步骤：
 - `VITE_BUILD_VERSION` 在 workflow 中设置为 `${{ github.sha }}`
 - `VITE_PVP_WS_URL` 从 GitHub repository variable 读取
 
+当前生产基线：
+
+- GitHub Pages Source：`GitHub Actions`
+- Pages 环境：`github-pages`
+- 允许发布分支：至少包含 `snake1-pvp`
+- 线上页面：`https://yijunjian123-beep.github.io/snake1/`
+- 当前后端：`wss://pvp.junjian.site/ws`
+
 ## 3. `VITE_PVP_WS_URL` 在哪里配置
 在 GitHub 仓库的 `Settings` -> `Secrets and variables` -> `Actions` 里配置 repository variable。
 
@@ -31,7 +39,15 @@ workflow 至少执行这些步骤：
 VITE_PVP_WS_URL=wss://your-pvp-domain/ws
 ```
 
+本项目当前实际值是：
+
+```text
+VITE_PVP_WS_URL=wss://pvp.junjian.site/ws
+```
+
 不要在生产包里写死 `ws://localhost:8787/ws`。
+
+也不要在代码里硬编码 `wss://pvp.junjian.site/ws`。生产地址只允许通过 GitHub repository variable 注入。
 
 如果你还没把腾讯云后端正式接成域名，先不要发布正式 GitHub Pages 版本；等后端有可用的 `wss://` 地址后再填这个变量。
 
@@ -79,3 +95,11 @@ http://127.0.0.1:4173/<repo-name>/
 2. 腾讯云后端能访问 `/metrics.json`。
 3. 浏览器能连上 `wss://.../ws`。
 4. GitHub Pages 的 `VITE_PVP_WS_URL` 已经填好。
+
+当前阶段 13.5 的已验证结果：
+
+- `https://pvp.junjian.site/health` 正常。
+- `https://pvp.junjian.site/metrics.json` 正常。
+- GitHub Pages 构建包包含 `wss://pvp.junjian.site/ws`。
+- GitHub Pages 构建包不包含 `ws://localhost:8787/ws`。
+- 页面点击 PVP 后可以显示 `PVP connected` 并进入匹配队列。

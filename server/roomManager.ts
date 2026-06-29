@@ -109,6 +109,7 @@ export class RoomManager {
     }
 
     player.ready = ready;
+    room.phase = room.players.some((candidate) => candidate.ready) ? "ready" : "waiting";
     room.updatedAt = now;
     return room;
   }

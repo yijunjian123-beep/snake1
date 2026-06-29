@@ -259,6 +259,8 @@ export function createGameUi(): GameUiElements {
   const roomPlayersLabel = new FakeElement();
   const roomCodeField = new FakeElement();
   const roomCodeInput = new FakeElement() as unknown as HTMLInputElement;
+  const pvpSoloButton = new FakeElement() as unknown as HTMLButtonElement;
+  const randomMatchButton = new FakeElement() as unknown as HTMLButtonElement;
   const createRoomButton = new FakeElement() as unknown as HTMLButtonElement;
   const joinRoomButton = new FakeElement() as unknown as HTMLButtonElement;
   const readyRoomButton = new FakeElement() as unknown as HTMLButtonElement;
@@ -305,6 +307,8 @@ export function createGameUi(): GameUiElements {
   debugBufferedInputsLabel.hidden = true;
   debugConnectionStateLabel.hidden = true;
   debugPlayerSlotLabel.hidden = true;
+  pvpSoloButton.textContent = "单人模式";
+  randomMatchButton.textContent = "随机匹配";
 
   return {
     root: root as unknown as HTMLElement,
@@ -327,6 +331,8 @@ export function createGameUi(): GameUiElements {
     roomPlayersLabel: roomPlayersLabel as unknown as HTMLElement,
     roomCodeField: roomCodeField as unknown as HTMLElement,
     roomCodeInput,
+    pvpSoloButton,
+    randomMatchButton,
     createRoomButton,
     joinRoomButton,
     readyRoomButton,

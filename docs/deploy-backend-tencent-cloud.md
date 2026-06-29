@@ -8,6 +8,23 @@
 - 地域：中国香港
 - 配置：2 核 / 4 GB / 70 GB SSD
 
+## 当前生产基线（不要在 Prompt 14/15 回退）
+
+阶段 13.5 已经完成真实接入，后续体验打磨不应该改掉这些值：
+
+- 后端域名：`pvp.junjian.site`
+- DNS：`pvp.junjian.site -> 43.135.51.107`
+- 后端本机监听：`127.0.0.1:8787`
+- 对外入口：Nginx + HTTPS/WSS，只走 `80/443`
+- 健康检查：`https://pvp.junjian.site/health`
+- 指标接口：`https://pvp.junjian.site/metrics.json`
+- WebSocket：`wss://pvp.junjian.site/ws`
+- GitHub Pages origin：`https://yijunjian123-beep.github.io`
+- 前端 Pages 地址：`https://yijunjian123-beep.github.io/snake1/`
+- GitHub repository variable：`VITE_PVP_WS_URL=wss://pvp.junjian.site/ws`
+
+后续 Prompt 14/15 只能在体验、提示、回归测试和压测记录上继续推进，不能把生产地址改回 `ws://localhost:8787/ws`、公网 IP 直连或代码硬编码地址。
+
 ## 先说结论
 
 1. **如果还没有域名**，先做“临时验证方案”。
@@ -126,10 +143,22 @@ docker compose -f deploy/docker-compose.pvp.yml up -d --build
 VITE_PVP_WS_URL=wss://pvp.example.com/ws
 ```
 
+本项目当前实际值是：
+
+```text
+VITE_PVP_WS_URL=wss://pvp.junjian.site/ws
+```
+
 同时确认后端允许你的 GitHub Pages origin，例如：
 
 ```text
 https://<username>.github.io
+```
+
+本项目当前实际 origin 是：
+
+```text
+https://yijunjian123-beep.github.io
 ```
 
 ### 6. 验证
@@ -139,10 +168,23 @@ curl https://pvp.example.com/health
 curl https://pvp.example.com/metrics.json
 ```
 
+本项目当前实际验证地址是：
+
+```bash
+curl https://pvp.junjian.site/health
+curl https://pvp.junjian.site/metrics.json
+```
+
 远端烟测：
 
 ```bash
 npm run smoke:pvp-remote -- --base-url https://pvp.example.com --origin https://<username>.github.io --require-wss
+```
+
+本项目当前实际 smoke test 参数应该使用：
+
+```bash
+npm run smoke:pvp-remote -- --base-url https://pvp.junjian.site --origin https://yijunjian123-beep.github.io --require-wss
 ```
 
 ## 你现在该做什么
@@ -172,4 +214,3 @@ npm run smoke:pvp-remote -- --base-url https://pvp.example.com --origin https://
 ### 先别写“支持 200 人”
 
 除非你真的跑过 200 人压测并通过，否则不要把这句话写进发布文案。
-

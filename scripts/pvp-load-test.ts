@@ -13,6 +13,8 @@ interface LoadTestConfig {
   rampUpSec: number;
   pingIntervalMs: number;
   metricsPollMs: number;
+  metricsTimeoutMs: number;
+  origin: string;
 }
 
 interface LoadTestStats {
@@ -88,6 +90,8 @@ const DEFAULT_CONFIG: LoadTestConfig = {
   rampUpSec: 10,
   pingIntervalMs: 5_000,
   metricsPollMs: 2_000,
+  metricsTimeoutMs: 5_000,
+  origin: "http://localhost:5173",
 };
 
 const KNOWN_ERROR_CODES = new Set([
@@ -186,7 +190,7 @@ async function main(): Promise<void> {
     }
 
     activeMetricsPoll = true;
-    void pollMetrics(config.metricsUrl, stats)
+    void pollMetrics(config, stats)
       .catch((error: unknown) => {
         stats.metricsFetchFailures += 1;
         const message = error instanceof Error ? error.message : String(error);
@@ -209,7 +213,7 @@ async function main(): Promise<void> {
 
   stopping = true;
 
-  await pollMetrics(config.metricsUrl, stats);
+  await pollMetrics(config, stats);
 
   await closeClients(clients);
 
@@ -282,7 +286,7 @@ function createClient(
   endAt: number,
 ): ClientState {
   const socket = new WebSocket(config.url, {
-    origin: "http://localhost:5173",
+    origin: config.origin,
   });
 
   const client: ClientState = {
@@ -573,8 +577,8 @@ function recordError(stats: LoadTestStats, code: string): void {
   }
 }
 
-async function pollMetrics(metricsUrl: string, stats: LoadTestStats): Promise<void> {
-  const response = await fetchWithTimeout(metricsUrl, 5_000);
+async function pollMetrics(config: LoadTestConfig, stats: LoadTestStats): Promise<void> {
+  const response = await fetchWithTimeout(config.metricsUrl, config.metricsTimeoutMs);
 
   if (!response.ok) {
     throw new Error(`metrics request failed with ${response.status}`);
@@ -744,6 +748,12 @@ function parseArgs(argv: readonly string[]): LoadTestConfig {
         break;
       case "--ramp-up":
         config.rampUpSec = readPositiveInteger(takeValue(), "ramp-up");
+        break;
+      case "--origin":
+        config.origin = takeValue();
+        break;
+      case "--metrics-timeout":
+        config.metricsTimeoutMs = readPositiveInteger(takeValue(), "metrics-timeout");
         break;
       default:
         if (!flag.startsWith("--")) {

@@ -33,6 +33,7 @@ export interface PvpConnectionControllerOptions {
   readonly now?: () => number;
   readonly reconnectDelayMs?: number;
   readonly maxReconnectAttempts?: number;
+  readonly connectTimeoutMs?: number;
   readonly sessionStorage?: SessionStorageLike | null;
   readonly onPeerInput?: (message: Extract<ServerToClientMessage, { readonly type: "peerInput" }>) => void;
   readonly onSnapshot?: (message: Extract<ServerToClientMessage, { readonly type: "snapshot" }>) => void;
@@ -45,6 +46,8 @@ export interface PvpConnectionController {
   subscribe(listener: (state: PvpConnectionState) => void): () => void;
   sendInput(message: Extract<ClientToServerMessage, { readonly type: "input" }>): boolean;
   enterMatchmaking(): void;
+  resumeSession(): boolean;
+  openLobby(): void;
   createPrivateRoom(): void;
   openJoinRoomEntry(): void;
   updateJoinCode(value: string): void;
@@ -57,6 +60,7 @@ export interface PvpConnectionController {
 
 const DEFAULT_RECONNECT_DELAY_MS = 1_000;
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 2;
+const DEFAULT_CONNECT_TIMEOUT_MS = 8_000;
 const PVP_CLIENT_VERSION = "0.1.0";
 const SESSION_TOKEN_STORAGE_KEY = "snake1:pvp-session-token";
 
@@ -67,7 +71,8 @@ const NOTICE_RESUME_PRIVATE_ROOM = "重连成功，正在重新创建房间";
 const NOTICE_RESUME_JOIN_ROOM = "重连成功，正在重新加入房间";
 const NOTICE_MATCHMAKING_CANCELLED = "已取消匹配";
 const NOTICE_OPPONENT_LEFT = "对手已离开";
-const NOTICE_OPPONENT_DISCONNECTED = "对手断线，你获胜";
+const NOTICE_OPPONENT_DISCONNECTED_WIN = "对手断线，你获胜";
+const NOTICE_OPPONENT_DISCONNECTED_LOSS = "你已断线，对手获胜";
 const NOTICE_ROOM_CREATED = "房间已创建，把房间码发给好友";
 const NOTICE_WAITING_ROOM = "等待房间状态同步";
 const NOTICE_MATCHMAKING_READY = "匹配成功，正在等待对局开始";
@@ -144,6 +149,7 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
   const now = options.now ?? (() => Date.now());
   const reconnectDelayMs = options.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
   const maxReconnectAttempts = options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
+  const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
   const sessionStorage = options.sessionStorage ?? resolveSessionStorage();
   const storedSessionToken = readStoredSessionToken(sessionStorage);
 
@@ -155,8 +161,9 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
       };
   let client: PvpClient | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let connectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
-  let manualClose = false;
+  let manualCloseClient: PvpClient | null = null;
   let destroyed = false;
   let welcomedCurrentSocket = false;
 
@@ -189,6 +196,34 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     }
   }
 
+  function clearConnectTimer(): void {
+    if (connectTimer !== null) {
+      clearTimeout(connectTimer);
+      connectTimer = null;
+    }
+  }
+
+  function startConnectTimer(): void {
+    clearConnectTimer();
+
+    connectTimer = setTimeout(() => {
+      connectTimer = null;
+
+      if (destroyed || welcomedCurrentSocket) {
+        return;
+      }
+
+      if (client !== null) {
+        const closingClient = client;
+        manualCloseClient = closingClient;
+        closingClient.disconnect();
+        client = null;
+      }
+
+      failWithUnavailableMessage(state.flow);
+    }, connectTimeoutMs);
+  }
+
   function buildLobbyState(flow: PvpLobbyFlow, patch: Partial<PvpConnectionState> = {}): PvpConnectionState {
     const joinCode = flow === "join" ? state.joinCode : "";
 
@@ -212,13 +247,15 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
 
   function closeClient(): void {
     clearReconnectTimer();
+    clearConnectTimer();
 
     if (client === null) {
       return;
     }
 
-    manualClose = true;
-    client.disconnect();
+    const closingClient = client;
+    manualCloseClient = closingClient;
+    closingClient.disconnect();
     client = null;
     welcomedCurrentSocket = false;
   }
@@ -236,15 +273,17 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     welcomedCurrentSocket = false;
 
     try {
-      client = new PvpClient({
+      const nextClient = new PvpClient({
         url: options.url,
         socketFactory: options.socketFactory,
-        onOpen: handleSocketOpen,
-        onMessage: handleServerMessage,
-        onError: handleSocketError,
-        onClose: handleSocketClose,
-        onInvalidMessage: handleInvalidMessage,
+        onOpen: () => handleSocketOpen(nextClient),
+        onMessage: (message) => handleServerMessage(nextClient, message),
+        onError: () => handleSocketError(nextClient),
+        onClose: () => handleSocketClose(nextClient),
+        onInvalidMessage: (detail) => handleInvalidMessage(nextClient, detail),
       });
+      client = nextClient;
+      startConnectTimer();
       client.connect();
     } catch {
       client = null;
@@ -253,16 +292,36 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
   }
 
   function connectWithFlow(flow: PvpLobbyFlow): void {
+    persistSessionToken(null);
     closeClient();
     reconnectAttempts = 0;
     setState(buildLobbyState(flow, {
+      sessionToken: null,
       status: "connecting",
     }));
     createClientForCurrentFlow();
   }
 
-  function handleSocketOpen(): void {
-    if (destroyed) {
+  function resumeStoredSession(): boolean {
+    const sessionToken = state.sessionToken;
+
+    if (sessionToken === null) {
+      return false;
+    }
+
+    closeClient();
+    reconnectAttempts = 0;
+    setState(buildLobbyState(state.flow, {
+      sessionToken,
+      status: "connecting",
+      notice: NOTICE_RECONNECTING,
+    }));
+    createClientForCurrentFlow();
+    return true;
+  }
+
+  function handleSocketOpen(sourceClient: PvpClient): void {
+    if (destroyed || sourceClient !== client) {
       return;
     }
 
@@ -274,8 +333,8 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     }
   }
 
-  function handleServerMessage(message: ServerToClientMessage): void {
-    if (destroyed) {
+  function handleServerMessage(sourceClient: PvpClient, message: ServerToClientMessage): void {
+    if (destroyed || sourceClient !== client) {
       return;
     }
 
@@ -401,7 +460,7 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
           errorCode: null,
           errorMessage: null,
           notice: message.reason === "opponent_disconnected"
-            ? NOTICE_OPPONENT_DISCONNECTED
+            ? getOpponentDisconnectedNotice(message, state.playerSlot)
             : message.reason === "opponent_left"
               ? NOTICE_OPPONENT_LEFT
               : "对局已结束",
@@ -431,6 +490,7 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     welcomedCurrentSocket = true;
     reconnectAttempts = 0;
     clearReconnectTimer();
+    clearConnectTimer();
 
     updateState({
       playerId: message.playerId,
@@ -559,7 +619,11 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     });
   }
 
-  function handleInvalidMessage(detail: string): void {
+  function handleInvalidMessage(sourceClient: PvpClient, detail: string): void {
+    if (sourceClient !== client) {
+      return;
+    }
+
     updateState({
       status: "error",
       errorCode: "invalid_message",
@@ -568,12 +632,13 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     });
   }
 
-  function handleSocketError(): void {
-    if (destroyed) {
+  function handleSocketError(sourceClient: PvpClient): void {
+    if (destroyed || sourceClient !== client) {
       return;
     }
 
     if (state.status === "connecting") {
+      clearConnectTimer();
       updateState({
         status: "error",
         errorMessage: DEFAULT_PVP_UNAVAILABLE_MESSAGE,
@@ -581,15 +646,23 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     }
   }
 
-  function handleSocketClose(): void {
+  function handleSocketClose(sourceClient: PvpClient): void {
     if (destroyed) {
       return;
     }
 
-    client = null;
+    if (sourceClient !== client) {
+      if (manualCloseClient === sourceClient) {
+        manualCloseClient = null;
+      }
+      return;
+    }
 
-    if (manualClose) {
-      manualClose = false;
+    client = null;
+    clearConnectTimer();
+
+    if (manualCloseClient === sourceClient) {
+      manualCloseClient = null;
       return;
     }
 
@@ -696,6 +769,19 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
     enterMatchmaking(): void {
       connectWithFlow("matchmaking");
     },
+    resumeSession(): boolean {
+      return resumeStoredSession();
+    },
+    openLobby(): void {
+      persistSessionToken(null);
+      closeClient();
+      reconnectAttempts = 0;
+      setState(buildLobbyState("matchmaking", {
+        status: "disconnected",
+        sessionToken: null,
+        notice: "选择单人模式、创建房间、加入房间，或随机匹配。",
+      }));
+    },
     createPrivateRoom(): void {
       connectWithFlow("invite");
     },
@@ -778,9 +864,23 @@ export function createPvpConnectionController(options: PvpConnectionControllerOp
       destroyed = true;
       listeners.clear();
       clearReconnectTimer();
+      clearConnectTimer();
       closeClient();
     },
   };
+}
+
+function getOpponentDisconnectedNotice(
+  message: Extract<ServerToClientMessage, { readonly type: "gameOver" }>,
+  playerSlot: PvpConnectionState["playerSlot"],
+): string {
+  if (message.winner === "draw" || playerSlot === null) {
+    return "对局已结束";
+  }
+
+  return message.winner === playerSlot
+    ? NOTICE_OPPONENT_DISCONNECTED_WIN
+    : NOTICE_OPPONENT_DISCONNECTED_LOSS;
 }
 
 function shouldReconnect(status: PvpConnectionState["status"]): boolean {

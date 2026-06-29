@@ -284,6 +284,8 @@ export interface GameUiElements {
   roomPlayersLabel: HTMLElement;
   roomCodeField: HTMLElement;
   roomCodeInput: HTMLInputElement;
+  pvpSoloButton: HTMLButtonElement;
+  randomMatchButton: HTMLButtonElement;
   createRoomButton: HTMLButtonElement;
   joinRoomButton: HTMLButtonElement;
   readyRoomButton: HTMLButtonElement;

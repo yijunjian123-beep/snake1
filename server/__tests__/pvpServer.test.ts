@@ -407,8 +407,12 @@ test("reconnect within grace restores a waiting private room", async () => {
 
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     await readUntilType(guest, "roomJoined");
-    await readUntilType(owner, "roomState", (message) => message.phase === "countdown");
-    await readUntilType(owner, "countdown");
+    const joinedState = await readUntilType(owner, "roomState", (message) => (
+      message.phase === "waiting"
+      && message.players.length === 2
+    ));
+
+    assert.equal(joinedState.players.every((player) => !player.ready), true);
 
     await closeSocket(owner.socket);
     await readUntilType(guest, "opponentLeft");
@@ -491,18 +495,19 @@ test("disconnect from a ready private room returns the room to waiting and notif
 
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     await readUntilType(guest, "roomJoined");
-    await readUntilType(owner, "roomState", (message) => message.phase === "countdown");
-    await readUntilType(owner, "countdown");
-    await readUntilType(guest, "countdown");
+    await readUntilType(owner, "roomState", (message) => (
+      message.phase === "waiting"
+      && message.players.length === 2
+    ));
 
-    const room = server.runtime.rooms.values()[0];
-    assert.ok(room);
+    owner.socket.send(JSON.stringify({ type: "ready", ready: true }));
+    const readyState = await readUntilType(guest, "roomState", (message) => (
+      message.phase === "ready"
+      && message.players.some((player) => player.playerSlot === "p1" && player.ready)
+      && message.players.some((player) => player.playerSlot === "p2" && !player.ready)
+    ));
 
-    server.runtime.rooms.clearCountdown(room.roomId);
-    room.phase = "ready";
-    for (const player of room.players) {
-      player.ready = true;
-    }
+    assert.equal(readyState.players.length, 2);
 
     await closeSocket(owner.socket);
     const opponentLeft = await readUntilType(guest, "opponentLeft");
@@ -539,8 +544,12 @@ test("reconnect fails after the grace window expires", async () => {
 
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     await readUntilType(guest, "roomJoined");
-    await readUntilType(owner, "roomState", (message) => message.phase === "countdown");
-    await readUntilType(owner, "countdown");
+    const joinedState = await readUntilType(owner, "roomState", (message) => (
+      message.phase === "waiting"
+      && message.players.length === 2
+    ));
+
+    assert.equal(joinedState.players.every((player) => !player.ready), true);
 
     await closeSocket(owner.socket);
     await readUntilType(guest, "opponentLeft");
@@ -635,6 +644,28 @@ test("room_capacity_reached returns a clear error when no more rooms can be crea
   }
 });
 
+test("createRoom is rejected when PVP_MAX_ROOMS is reached", async () => {
+  const server = await startTestServer({ maxRooms: 0 });
+
+  try {
+    const client = await openSocket(server.port);
+    await client.readMessage();
+
+    client.socket.send(JSON.stringify({ type: "createRoom" }));
+    const response = await readUntilType(client, "error");
+
+    assert.deepEqual(response, {
+      type: "error",
+      code: "room_capacity_reached",
+      message: "All PVP rooms are busy right now",
+    });
+
+    await closeSocket(client.socket);
+  } finally {
+    await server.runtime.close();
+  }
+});
+
 test("matchmakingJoin is rejected while already playing", async () => {
   const server = await startTestServer({ countdownMs: 20 });
 
@@ -657,7 +688,7 @@ test("matchmakingJoin is rejected while already playing", async () => {
   }
 });
 
-test("createRoom generates a private room code and joinRoom auto-starts countdown", async () => {
+test("createRoom generates a private room code and waits for both players to ready before countdown", async () => {
   const server = await startTestServer({ countdownMs: 40 });
 
   try {
@@ -676,14 +707,31 @@ test("createRoom generates a private room code and joinRoom auto-starts countdow
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
 
     const roomJoined = await readUntilType(guest, "roomJoined");
+    const ownerJoinedState = await readUntilType(owner, "roomState", (message) => (
+      message.phase === "waiting"
+      && message.players.length === 2
+    ));
+
+    assert.equal(roomJoined.roomCode, roomCreated.roomCode);
+    assert.equal(roomJoined.playerSlot, "p2");
+    assert.equal(ownerJoinedState.players.every((player) => !player.ready), true);
+
+    owner.socket.send(JSON.stringify({ type: "ready", ready: true }));
+    const ownerReadyState = await readUntilType(owner, "roomState", (message) => (
+      message.phase === "ready"
+      && message.players.some((player) => player.playerSlot === "p1" && player.ready)
+      && message.players.some((player) => player.playerSlot === "p2" && !player.ready)
+    ));
+
+    assert.equal(ownerReadyState.players.length, 2);
+
+    guest.socket.send(JSON.stringify({ type: "ready", ready: true }));
     const ownerCountdownState = await readUntilType(owner, "roomState", (message) => message.phase === "countdown");
     const ownerCountdown = await readUntilType(owner, "countdown");
     const guestCountdown = await readUntilType(guest, "countdown");
     const ownerGameStart = await readUntilType(owner, "gameStart");
     const guestGameStart = await readUntilType(guest, "gameStart");
 
-    assert.equal(roomJoined.roomCode, roomCreated.roomCode);
-    assert.equal(roomJoined.playerSlot, "p2");
     assert.equal(ownerCountdownState.phase, "countdown");
     assert.equal(ownerCountdownState.players.length, 2);
     assert.equal(ownerCountdown.startsInMs, 40);
@@ -714,6 +762,13 @@ test("playing room relays inputs, keeps out-of-order ticks sorted, and rejects d
 
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     await readUntilType(guest, "roomJoined");
+    owner.socket.send(JSON.stringify({ type: "ready", ready: true }));
+    await readUntilType(owner, "roomState", (message) => (
+      message.phase === "ready"
+      && message.players.some((player) => player.playerSlot === "p1" && player.ready)
+      && message.players.some((player) => player.playerSlot === "p2" && !player.ready)
+    ));
+    guest.socket.send(JSON.stringify({ type: "ready", ready: true }));
     await readUntilType(owner, "countdown");
     await readUntilType(guest, "countdown");
     await readUntilType(owner, "gameStart");
@@ -791,6 +846,13 @@ test("rapid input bursts are rate limited", async () => {
 
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     await readUntilType(guest, "roomJoined");
+    owner.socket.send(JSON.stringify({ type: "ready", ready: true }));
+    await readUntilType(owner, "roomState", (message) => (
+      message.phase === "ready"
+      && message.players.some((player) => player.playerSlot === "p1" && player.ready)
+      && message.players.some((player) => player.playerSlot === "p2" && !player.ready)
+    ));
+    guest.socket.send(JSON.stringify({ type: "ready", ready: true }));
     await readUntilType(owner, "countdown");
     await readUntilType(guest, "countdown");
     await readUntilType(owner, "gameStart");
@@ -835,8 +897,6 @@ test("room_full is returned when trying to join a full private room", async () =
 
     guest.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     await readUntilType(guest, "roomJoined");
-    await readUntilType(owner, "countdown");
-    await readUntilType(guest, "countdown");
 
     intruder.socket.send(JSON.stringify({ type: "joinRoom", roomCode: roomCreated.roomCode }));
     const error = await readUntilType(intruder, "error");
@@ -889,8 +949,13 @@ test("disconnect during countdown returns the room to waiting and notifies the o
   }
 });
 
-test("disconnect during playing awards the opponent a win", async () => {
-  const server = await startTestServer({ countdownMs: 20, finishedRoomTtlMs: 1_000, cleanupIntervalMs: 10 });
+test("disconnect during playing awards the opponent a win after reconnect grace expires", async () => {
+  const server = await startTestServer({
+    countdownMs: 20,
+    reconnectGraceMs: 30,
+    finishedRoomTtlMs: 1_000,
+    cleanupIntervalMs: 10,
+  });
 
   try {
     const first = await openSocket(server.port);
@@ -906,6 +971,15 @@ test("disconnect during playing awards the opponent a win", async () => {
     await readUntilType(second, "gameStart");
 
     await closeSocket(second.socket);
+    await waitFor(() => (
+      server.runtime.rooms.values()[0]?.phase === "playing"
+      && server.runtime.rooms.values()[0]?.players.filter((player) => player.connected).length === 1
+    ));
+    const playingRoom = server.runtime.rooms.values()[0];
+
+    assert.equal(playingRoom?.phase, "playing");
+    assert.equal(playingRoom?.players.filter((player) => player.connected).length, 1);
+
     const gameOver = await readUntilType(first, "gameOver");
 
     assert.deepEqual(gameOver, {
@@ -923,6 +997,66 @@ test("disconnect during playing awards the opponent a win", async () => {
     assert.equal(server.runtime.rooms.size, 0);
 
     await closeSocket(first.socket);
+  } finally {
+    await server.runtime.close();
+  }
+});
+
+test("playing reconnect within grace restores the room before awarding a disconnect win", async () => {
+  const server = await startTestServer({
+    countdownMs: 20,
+    reconnectGraceMs: 200,
+    cleanupIntervalMs: 10,
+    tickRate: 20,
+  });
+
+  try {
+    const first = await openSocket(server.port);
+    const second = await openSocket(server.port);
+    const firstWelcome = await first.readMessage();
+    await second.readMessage();
+
+    first.socket.send(JSON.stringify({ type: "matchmakingJoin" }));
+    await readUntilType(first, "queueState");
+
+    second.socket.send(JSON.stringify({ type: "matchmakingJoin" }));
+    await readUntilType(first, "gameStart");
+    await readUntilType(second, "gameStart");
+
+    await closeSocket(first.socket);
+    await readUntilType(second, "roomState", (message) => (
+      message.phase === "playing"
+      && message.players.some((player) => player.playerSlot === "p1" && !player.connected)
+      && message.players.some((player) => player.playerSlot === "p2" && player.connected)
+    ));
+
+    const reconnect = await openSocket(server.port);
+    await reconnect.readMessage();
+
+    reconnect.socket.send(JSON.stringify({
+      type: "hello",
+      clientVersion: "0.1.0",
+      sessionToken: firstWelcome.sessionToken,
+    }));
+
+    const reconnectResult = await readUntilType(reconnect, "reconnectResult");
+    const roomState = await readUntilType(reconnect, "roomState", (message) => (
+      message.phase === "playing"
+      && message.players.every((player) => player.connected)
+    ));
+    const gameStart = await readUntilType(reconnect, "gameStart");
+    const snapshot = await readUntilType(reconnect, "snapshot");
+
+    assert.equal(reconnectResult.ok, true);
+    assert.equal(reconnectResult.phase, "playing");
+    assert.equal(reconnectResult.playerSlot, "p1");
+    assert.equal(roomState.players.length, 2);
+    assert.deepEqual(gameStart.playerSlots, ["p1", "p2"]);
+    assert.equal(snapshot.phase, "playing");
+    assert.equal(server.runtime.rooms.values()[0]?.phase, "playing");
+
+    await closeSocket(reconnect.socket);
+    await closeSocket(second.socket);
   } finally {
     await server.runtime.close();
   }
@@ -1058,7 +1192,7 @@ test("maxConnections rejects the boundary connection", async () => {
 
     assert.deepEqual(response, {
       type: "error",
-      code: "service_busy",
+      code: "capacity_reached",
       message: "PVP server is busy",
     });
     assert.equal(server.runtime.connections.size, 1);

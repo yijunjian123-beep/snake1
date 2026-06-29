@@ -29,6 +29,8 @@ npm run loadtest:pvp -- --clients 20 --duration 20 --input-rate 10 --ramp-up 5
 - `--duration`：压测时长，单位秒，默认 `120`
 - `--input-rate`：playing 状态下每个客户端每秒发送输入次数，默认 `10`
 - `--ramp-up`：客户端分批接入时长，单位秒，默认 `10`
+- `--origin`：WebSocket 握手 Origin，默认 `http://localhost:5173`
+- `--metrics-timeout`：单次 `/metrics.json` 采样超时，单位毫秒，默认 `5000`
 
 ## 结果判断
 

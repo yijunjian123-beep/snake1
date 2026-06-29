@@ -33,6 +33,8 @@ const ui: GameUiElements = {
   roomPlayersLabel: queryRequired<HTMLElement>("#room-players-label"),
   roomCodeField: queryRequired<HTMLElement>("#room-code-field"),
   roomCodeInput: queryRequired<HTMLInputElement>("#room-code-input"),
+  pvpSoloButton: queryRequired<HTMLButtonElement>("#pvp-solo-button"),
+  randomMatchButton: queryRequired<HTMLButtonElement>("#random-match-button"),
   createRoomButton: queryRequired<HTMLButtonElement>("#create-room-button"),
   joinRoomButton: queryRequired<HTMLButtonElement>("#join-room-button"),
   readyRoomButton: queryRequired<HTMLButtonElement>("#ready-room-button"),

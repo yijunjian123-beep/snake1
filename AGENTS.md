@@ -48,6 +48,15 @@
 - 本地 WebSocket 地址：`ws://localhost:8787/ws`。
 - 前端必须通过 `VITE_PVP_WS_URL` 读取后端地址。
 
+当前生产基线（Prompt 14 及之后不得回退）：
+- GitHub Pages 前端地址：`https://yijunjian123-beep.github.io/snake1/`。
+- 腾讯云 PVP 后端域名：`pvp.junjian.site`，解析到 `43.135.51.107`。
+- 生产 WebSocket 地址：`wss://pvp.junjian.site/ws`。
+- GitHub Actions repository variable 必须保留：`VITE_PVP_WS_URL=wss://pvp.junjian.site/ws`。
+- GitHub Pages 的 Source 必须保持为 `GitHub Actions`，`github-pages` environment 必须允许 `snake1-pvp` 分支部署。
+- 后端由 Docker 跑 Node PVP 服务，本机端口 `127.0.0.1:8787`，Nginx 负责 `443`/HTTPS/WSS 反向代理。
+- 对外正式只依赖 `80/443`；不要把生产前端改回 `ws://localhost`、服务器 IP 直连或硬编码 WebSocket 地址。
+
 容量目标：
 - 200 人同时在线。
 - 约 100 个并发 1v1 房间。

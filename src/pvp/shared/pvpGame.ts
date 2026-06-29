@@ -578,7 +578,7 @@ function getPvpStartingHead(columns: number, rows: number, playerId: PlayerSlot)
   const isFirst = playerId === "p1";
   return {
     column: isFirst ? Math.max(PVP_STARTING_LENGTH, Math.floor(columns * 0.32)) : Math.min(columns - PVP_STARTING_LENGTH - 1, Math.ceil(columns * 0.68)),
-    row: Math.floor(rows / 2),
+    row: clampGridIndex(isFirst ? Math.floor(rows * 0.35) : Math.ceil(rows * 0.65), rows),
   };
 }
 
@@ -646,6 +646,10 @@ function findPreviousPvpInput(
 
 function isStalePvpInput(messageTick: number, lastTick: number, inputDelayTicks: number): boolean {
   return lastTick >= 0 && messageTick + inputDelayTicks < lastTick;
+}
+
+function clampGridIndex(value: number, size: number): number {
+  return Math.max(0, Math.min(size - 1, value));
 }
 
 function toPvpGridCell(cell: GridCell | null): PvpGridCell | null {

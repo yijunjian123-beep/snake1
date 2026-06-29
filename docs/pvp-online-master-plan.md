@@ -54,6 +54,23 @@
 - P2 现在通过在线真人输入同步驱动，不再是 `scripted` 占位；`scripted` 只保留给 `?localPvp=1` 烟测。
 - 真实 WebSocket、房间、匹配队列、网络同步、断线处理、重连、部署与压测已进入实现和验收阶段。
 
+## 当前生产部署基线（阶段 13.5 已完成）
+
+后续 Prompt 14/15 是体验打磨和验收推进，不应回退以下生产接入：
+
+- GitHub Pages 前端：`https://yijunjian123-beep.github.io/snake1/`
+- 腾讯云公网 IP：`43.135.51.107`
+- PVP 后端域名：`pvp.junjian.site`
+- HTTPS 健康检查：`https://pvp.junjian.site/health`
+- HTTPS 指标接口：`https://pvp.junjian.site/metrics.json`
+- 生产 WebSocket：`wss://pvp.junjian.site/ws`
+- GitHub Actions repository variable：`VITE_PVP_WS_URL=wss://pvp.junjian.site/ws`
+- GitHub Pages Source：`GitHub Actions`
+- `github-pages` environment 允许 `snake1-pvp` 分支部署
+- 后端 Docker 服务只在本机端口 `127.0.0.1:8787` 给 Nginx 反代，公网正式入口只走 `80/443`
+
+禁止后续阶段把生产前端改成 `ws://localhost:8787/ws`、公网 IP 直连、GitHub Pages 承载后端，或在前端源码中硬编码生产 WebSocket 地址。
+
 ## 不可破坏红线
 
 - 不破坏单人模式：必须能进入、开始、结束、重开。

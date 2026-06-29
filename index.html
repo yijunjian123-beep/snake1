@@ -93,6 +93,8 @@
               <span id="queue-count-label" class="room-stat"></span>
             </div>
             <div class="room-actions">
+              <button id="pvp-solo-button" class="secondary-action secondary-action--solo" type="button">单人模式</button>
+              <button id="random-match-button" class="secondary-action secondary-action--accent" type="button">随机匹配</button>
               <button
                 id="cancel-matchmaking-button"
                 class="secondary-action secondary-action--accent secondary-action--wide"
@@ -101,8 +103,8 @@
               >
                 取消匹配
               </button>
-              <button id="create-room-button" class="secondary-action" type="button">邀请好友</button>
-              <button id="join-room-button" class="secondary-action" type="button">输入房间码</button>
+              <button id="create-room-button" class="secondary-action" type="button">创建房间</button>
+              <button id="join-room-button" class="secondary-action" type="button">加入房间</button>
               <label id="room-code-field" class="room-code-field" hidden>
                 <span>房间码</span>
                 <input id="room-code-input" type="text" inputmode="text" placeholder="输入房间码" autocomplete="off" />

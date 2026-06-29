@@ -131,6 +131,8 @@ export interface PvpPanelState {
   readonly roomCodeInputValue: string;
   readonly roomCodeInputPlaceholder: string;
   readonly roomCodeInputReadOnly: boolean;
+  readonly randomMatchButtonText: string;
+  readonly randomMatchButtonDisabled: boolean;
   readonly createRoomButtonText: string;
   readonly createRoomButtonDisabled: boolean;
   readonly joinRoomButtonText: string;
@@ -151,13 +153,13 @@ const PVP_ERROR_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   invalid_session: "联机会话已失效，请重新进入",
   room_not_found: "未找到对应房间码",
   room_full: "该房间已满",
-  room_capacity_reached: "房间服务繁忙，请稍后再试",
+  room_capacity_reached: "当前在线人数较多，请稍后再试",
   not_in_room: "当前不在房间中",
   already_in_room: "你已在房间中",
-  queue_full: "匹配队列已满，请稍后再试",
+  queue_full: "当前在线人数较多，请稍后再试",
   capacity_reached: "当前在线人数较多，请稍后再试",
   invalid_state: "当前联机状态已变化，请重新操作",
-  service_busy: "房间服务繁忙，请稍后再试",
+  service_busy: "当前在线人数较多，请稍后再试",
   rate_limited: "连接已超时，请重新进入联机",
   server_busy: DEFAULT_PVP_UNAVAILABLE_MESSAGE,
   server_shutdown: DEFAULT_PVP_UNAVAILABLE_MESSAGE,
@@ -238,6 +240,13 @@ export function getPvpPanelState(state: PvpConnectionState, now: number = Date.n
       && state.status !== "connected"
       && state.status !== "matchmaking"
       && state.status !== "reconnecting");
+  const randomMatchBusy = state.flow === "matchmaking"
+    && (state.status === "connecting"
+      || state.status === "matchmaking"
+      || state.status === "matched"
+      || state.status === "countdown"
+      || state.status === "playing"
+      || state.status === "reconnecting");
 
   let heading = "在线 PVP";
   let subheading = flowLabel;
@@ -349,9 +358,11 @@ export function getPvpPanelState(state: PvpConnectionState, now: number = Date.n
     roomCodeInputValue,
     roomCodeInputPlaceholder: "输入房间码",
     roomCodeInputReadOnly,
-    createRoomButtonText: "邀请好友",
+    randomMatchButtonText: randomMatchBusy ? "随机匹配中" : "随机匹配",
+    randomMatchButtonDisabled: randomMatchBusy,
+    createRoomButtonText: "创建房间",
     createRoomButtonDisabled: false,
-    joinRoomButtonText: joinRoomEntryActive ? "加入房间" : "输入房间码",
+    joinRoomButtonText: "加入房间",
     joinRoomButtonDisabled: joinRoomEntryActive && !hasValidRoomCode(state.joinCode),
     readyButtonText: currentPlayer?.ready ? "取消准备" : "准备",
     readyButtonHidden,
@@ -372,7 +383,7 @@ function getErrorHeading(code: ErrorCode | null): string {
       return "当前在线人数较多";
     case "room_capacity_reached":
     case "service_busy":
-      return "房间服务繁忙";
+      return "当前在线人数较多";
     case "room_not_found":
       return "房间不存在";
     case "room_full":

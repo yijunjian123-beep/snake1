@@ -80,6 +80,8 @@ export interface UiSyncState {
   roomCodeInputValue: string;
   roomCodeInputPlaceholder: string;
   roomCodeInputReadOnly: boolean;
+  randomMatchButtonText: string;
+  randomMatchButtonDisabled: boolean;
   createRoomButtonText: string;
   createRoomButtonDisabled: boolean;
   joinRoomButtonText: string;

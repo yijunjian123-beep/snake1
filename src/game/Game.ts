@@ -44,7 +44,7 @@ import {
   type WallGraceState,
   type WorldRuntimeState,
 } from "./gameState";
-import { createInputState, createLocalPvpPlayers, createMatchState, createOnlinePvpPlayers, createSoloPlayers, createSpawnState, createTimingState, createWorldState, resetTimingState } from "./stateFactory";
+import { createInputState, createLifecycleState, createLocalPvpPlayers, createMatchState, createOnlinePvpPlayers, createSoloPlayers, createSpawnState, createTimingState, createWorldState, resetTimingState } from "./stateFactory";
 import {
   DEFAULT_REVIVE_COUNTDOWN_MS,
   canConfirmRevive,
@@ -741,6 +741,7 @@ export class Game {
       now: options.pvpConnectionOptions?.now,
       reconnectDelayMs: options.pvpConnectionOptions?.reconnectDelayMs,
       maxReconnectAttempts: options.pvpConnectionOptions?.maxReconnectAttempts,
+      connectTimeoutMs: options.pvpConnectionOptions?.connectTimeoutMs,
       sessionStorage: options.pvpConnectionOptions?.sessionStorage,
       onPeerInput: this.handlePeerInput,
       onSnapshot: this.handlePvpSnapshot,
@@ -767,6 +768,7 @@ export class Game {
     this.resetRun("ready");
     this.bindUi();
     this.unsubscribers.push(this.input.subscribe(this.handleInput));
+    this.resumeOnlinePvpSessionIfAvailable();
 
     window.addEventListener("resize", this.handleResize);
     window.addEventListener("orientationchange", this.handleResize);
@@ -1522,12 +1524,17 @@ export class Game {
 
   private readonly handlePvpPointer = (event: PointerEvent): void => {
     event.preventDefault();
-    this.openPvpRoomPanel();
+    this.openPvpRoomPanel({ autoMatch: true });
   };
 
   private readonly handleCreateRoomPointer = (event: PointerEvent): void => {
     event.preventDefault();
     this.pvpConnection.createPrivateRoom();
+  };
+
+  private readonly handleRandomMatchPointer = (event: PointerEvent): void => {
+    event.preventDefault();
+    this.pvpConnection.enterMatchmaking();
   };
 
   private readonly handleJoinRoomPointer = (event: PointerEvent): void => {
@@ -1569,11 +1576,23 @@ export class Game {
 
   private readonly handleContinuePointer = (event: PointerEvent): void => {
     event.preventDefault();
+
+    if (this.match.mode === "online-pvp" && this.phase === "gameOver") {
+      this.openPvpRoomPanel({ autoMatch: true });
+      return;
+    }
+
     this.continueRun();
   };
 
   private readonly handleMainMenuPointer = (event: PointerEvent): void => {
     event.preventDefault();
+
+    if (this.match.mode === "online-pvp" && this.phase === "gameOver") {
+      this.openPvpRoomPanel({ autoMatch: false });
+      return;
+    }
+
     this.returnToMainMenu();
   };
 
@@ -1596,6 +1615,25 @@ export class Game {
     this.syncUi(true);
   };
 
+  private resumeOnlinePvpSessionIfAvailable(): void {
+    const connectionState = this.pvpConnection.getState();
+
+    if (this.bootMode === "local-pvp" || connectionState.sessionToken === null) {
+      return;
+    }
+
+    this.runMode = "solo";
+    this.isOnlinePvpSession = false;
+    this.onlineSession = null;
+    this.shellView = "pvp-room";
+    this.roomNotice = "正在恢复在线 PVP 对局。";
+    this.resetMatchRun("solo", "ready");
+
+    if (!this.pvpConnection.resumeSession()) {
+      this.roomNotice = "联机会话已失效，请重新进入在线 PVP。";
+    }
+  }
+
   private readonly handlePvpSnapshot = (message: ServerSnapshotMessage): void => {
     if (this.match.mode !== "online-pvp" || this.onlineSession === null) {
       return;
@@ -1615,7 +1653,9 @@ export class Game {
     session.lastSnapshotTick = message.tick;
 
     if (predictedSnapshot.stateHash !== message.stateHash) {
-      session.syncNotice = `同步修正 tick ${message.tick}`;
+      session.syncNotice = this.debugPvpVisible
+        ? `同步修正 tick ${message.tick}`
+        : "已按服务端同步修正";
       this.applyOnlinePvpSnapshotCorrection(message);
     } else if (session.syncNotice !== null) {
       session.syncNotice = null;
@@ -1627,6 +1667,7 @@ export class Game {
 
   private readonly handlePvpGameOver = (message: ServerGameOverMessage): void => {
     if (this.match.mode !== "online-pvp" || this.onlineSession === null) {
+      this.showRecoveredOnlinePvpGameOver(message);
       return;
     }
 
@@ -1639,6 +1680,39 @@ export class Game {
     this.syncOnlinePvpRuntimeState({ authoritativeGameOver: message });
     this.syncUi(true);
   };
+
+  private showRecoveredOnlinePvpGameOver(message: ServerGameOverMessage): void {
+    const connectionState = this.pvpConnection.getState();
+    const localPlayerId = connectionState.playerSlot ?? (message.winner === "p2" ? "p1" : "p2");
+
+    this.runMode = "online-pvp";
+    this.shellView = "active-run";
+    this.isOnlinePvpSession = false;
+    this.onlineSession = null;
+    this.roomNotice = this.getRecoveredOnlinePvpNotice(message, localPlayerId);
+    this.match = createMatchState("online-pvp", "gameOver");
+    this.match.tick = message.finalTick;
+    this.match.winnerId = message.winner === "draw" ? null : message.winner;
+    this.players = createOnlinePvpPlayers(localPlayerId, "gameOver");
+    this.lifecycle = createLifecycleState("gameOver");
+    this.timing = resetTimingState(createTimingState());
+    this.world = createWorldState();
+    this.spawn = createSpawnState();
+    this.inputState = createInputState();
+    this.activeDirectionalInputs.clear();
+    this.activeSpeedInputs.clear();
+    this.syncUi(true);
+  }
+
+  private getRecoveredOnlinePvpNotice(message: ServerGameOverMessage, localPlayerId: PlayerId): string {
+    if (message.reason !== "opponent_disconnected" || message.winner === "draw") {
+      return "在线对局已结束";
+    }
+
+    return message.winner === localPlayerId
+      ? "对手断线，你获胜"
+      : "你已断线，对手获胜";
+  }
 
   private readonly handlePeerInput = (message: ServerPeerInputMessage): void => {
     if (this.match.mode !== "online-pvp" || this.onlineSession === null) {
@@ -1710,6 +1784,8 @@ export class Game {
     this.ui.continueButton.addEventListener("pointerup", this.handleContinuePointer);
     this.ui.mainMenuButton.addEventListener("pointerup", this.handleMainMenuPointer);
     this.ui.roomBackButton.addEventListener("pointerup", this.handleRoomBackPointer);
+    this.ui.pvpSoloButton.addEventListener("pointerup", this.handlePvePointer);
+    this.ui.randomMatchButton.addEventListener("pointerup", this.handleRandomMatchPointer);
     this.ui.createRoomButton.addEventListener("pointerup", this.handleCreateRoomPointer);
     this.ui.joinRoomButton.addEventListener("pointerup", this.handleJoinRoomPointer);
     this.ui.readyRoomButton.addEventListener("pointerup", this.handleReadyRoomPointer);
@@ -1726,6 +1802,8 @@ export class Game {
     this.ui.continueButton.removeEventListener("pointerup", this.handleContinuePointer);
     this.ui.mainMenuButton.removeEventListener("pointerup", this.handleMainMenuPointer);
     this.ui.roomBackButton.removeEventListener("pointerup", this.handleRoomBackPointer);
+    this.ui.pvpSoloButton.removeEventListener("pointerup", this.handlePvePointer);
+    this.ui.randomMatchButton.removeEventListener("pointerup", this.handleRandomMatchPointer);
     this.ui.createRoomButton.removeEventListener("pointerup", this.handleCreateRoomPointer);
     this.ui.joinRoomButton.removeEventListener("pointerup", this.handleJoinRoomPointer);
     this.ui.readyRoomButton.removeEventListener("pointerup", this.handleReadyRoomPointer);
@@ -1745,14 +1823,22 @@ export class Game {
     this.beginRun();
   }
 
-  private openPvpRoomPanel(): void {
+  private openPvpRoomPanel(options: { readonly autoMatch: boolean }): void {
     this.runMode = "solo";
     this.isOnlinePvpSession = false;
     this.onlineSession = null;
     this.shellView = "pvp-room";
-    this.roomNotice = "点击 PVP 后会自动连接服务并开始匹配。";
+    this.roomNotice = options.autoMatch
+      ? "正在连接在线 PVP 服务并开始随机匹配。"
+      : "选择单人模式、创建房间、加入房间，或随机匹配。";
     this.resetMatchRun("solo", "ready");
-    this.pvpConnection.enterMatchmaking();
+
+    if (options.autoMatch) {
+      this.pvpConnection.enterMatchmaking();
+      return;
+    }
+
+    this.pvpConnection.openLobby();
   }
 
   private continueRun(): void {

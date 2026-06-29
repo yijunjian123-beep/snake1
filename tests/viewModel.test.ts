@@ -125,6 +125,8 @@ function createUi() {
     roomPlayersLabel,
     roomCodeField,
     roomCodeInput: createFakeElement(),
+    pvpSoloButton: createFakeElement(),
+    randomMatchButton: createFakeElement(),
     createRoomButton: createFakeElement(),
     joinRoomButton: createFakeElement(),
     readyRoomButton,

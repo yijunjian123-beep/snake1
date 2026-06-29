@@ -167,6 +167,7 @@ interface PanelMetaLabelInput {
   isGameOver: boolean;
   isReviving: boolean;
   isRevivePrompt: boolean;
+  pvpConnectionStatus: PvpConnectionStatus;
   roomNotice?: string;
   syncNotice?: string | null;
   pvpStatus: string | null;
@@ -200,6 +201,8 @@ export interface UiSyncModel {
   roomCodeInputValue: string;
   roomCodeInputPlaceholder: string;
   roomCodeInputReadOnly: boolean;
+  randomMatchButtonText: string;
+  randomMatchButtonDisabled: boolean;
   createRoomButtonText: string;
   createRoomButtonDisabled: boolean;
   joinRoomButtonText: string;
@@ -279,6 +282,8 @@ export function createUiSyncState(): UiSyncState {
     roomCodeInputValue: "",
     roomCodeInputPlaceholder: "",
     roomCodeInputReadOnly: false,
+    randomMatchButtonText: "",
+    randomMatchButtonDisabled: false,
     createRoomButtonText: "",
     createRoomButtonDisabled: false,
     joinRoomButtonText: "",
@@ -424,7 +429,7 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
         : playerSummary ?? currentLengthDisplay;
   const lengthLabel = playerSummary ?? currentLengthDisplay;
   const unlockTitleLabel = isPvpMatch ? (isOnlinePvp ? "ONLINE PVP" : "LOCAL PVP") : unlockCopy.title;
-  const unlockValueLabel = isPvpMatch ? pvpStatus ?? `Tick ${input.match.tick}` : unlockCopy.value;
+  const unlockValueLabel = isPvpMatch ? pvpStatus ?? "对局进行中" : unlockCopy.value;
   const reviveCountdownSeconds = getReviveCountdownSeconds(input.reviving, input.reviveEndsAt, input.elapsed);
   const debug = input.debug ?? null;
   const panelSecondaryLabel = getPanelSecondaryLabel({
@@ -446,6 +451,7 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
     isGameOver,
     isReviving,
     isRevivePrompt,
+    pvpConnectionStatus: input.pvpConnectionStatus,
     roomNotice: input.roomNotice,
     syncNotice: input.syncNotice ?? null,
     pvpStatus,
@@ -481,9 +487,11 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
     roomCodeInputValue: pvpPanel?.roomCodeInputValue ?? "",
     roomCodeInputPlaceholder: pvpPanel?.roomCodeInputPlaceholder ?? "输入房间码",
     roomCodeInputReadOnly: pvpPanel?.roomCodeInputReadOnly ?? false,
-    createRoomButtonText: pvpPanel?.createRoomButtonText ?? "邀请好友",
+    randomMatchButtonText: pvpPanel?.randomMatchButtonText ?? "随机匹配",
+    randomMatchButtonDisabled: pvpPanel?.randomMatchButtonDisabled ?? false,
+    createRoomButtonText: pvpPanel?.createRoomButtonText ?? "创建房间",
     createRoomButtonDisabled: pvpPanel?.createRoomButtonDisabled ?? false,
-    joinRoomButtonText: pvpPanel?.joinRoomButtonText ?? "输入房间码",
+    joinRoomButtonText: pvpPanel?.joinRoomButtonText ?? "加入房间",
     joinRoomButtonDisabled: pvpPanel?.joinRoomButtonDisabled ?? false,
     readyRoomButtonText: pvpPanel?.readyButtonText ?? "准备",
     readyRoomButtonHidden: pvpPanel?.readyButtonHidden ?? true,
@@ -494,11 +502,11 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
     copyRoomCodeButtonHidden: pvpPanel?.copyButtonHidden ?? true,
     copyRoomCodeButtonDisabled: pvpPanel?.copyButtonDisabled ?? true,
     settlementActionsHidden: !isSettlement,
-    continueButtonText: "继续游戏",
-    continueButtonAriaLabel: "继续游戏",
+    continueButtonText: isOnlinePvp && isGameOver ? "再来一局" : "继续游戏",
+    continueButtonAriaLabel: isOnlinePvp && isGameOver ? "再来一局" : "继续游戏",
     continueButtonDisabled: isReviving,
-    mainMenuButtonText: "回到主界面",
-    mainMenuButtonAriaLabel: "回到主界面",
+    mainMenuButtonText: isOnlinePvp && isGameOver ? "返回大厅" : "回到主界面",
+    mainMenuButtonAriaLabel: isOnlinePvp && isGameOver ? "返回大厅" : "回到主界面",
     mainMenuButtonDisabled: false,
     pauseButtonDisabled: input.phase !== "playing" && input.phase !== "paused",
     pauseButtonText: input.phase === "paused" ? "▶" : "❚❚",
@@ -664,6 +672,16 @@ export function applyUiSyncModel(ui: GameUiElements, state: UiSyncState, model: 
   if (state.roomCodeInputReadOnly !== model.roomCodeInputReadOnly) {
     ui.roomCodeInput.readOnly = model.roomCodeInputReadOnly;
     state.roomCodeInputReadOnly = model.roomCodeInputReadOnly;
+  }
+
+  if (state.randomMatchButtonText !== model.randomMatchButtonText) {
+    ui.randomMatchButton.textContent = model.randomMatchButtonText;
+    state.randomMatchButtonText = model.randomMatchButtonText;
+  }
+
+  if (state.randomMatchButtonDisabled !== model.randomMatchButtonDisabled) {
+    ui.randomMatchButton.disabled = model.randomMatchButtonDisabled;
+    state.randomMatchButtonDisabled = model.randomMatchButtonDisabled;
   }
 
   if (state.createRoomButtonText !== model.createRoomButtonText) {
@@ -927,7 +945,7 @@ function getPvpStatus(match: MatchSnapshot, players: readonly PlayerUiInput[]): 
   }
 
   if (match.phase === "playing") {
-    return `Tick ${match.tick}`;
+    return "对局进行中";
   }
 
   return null;
@@ -983,7 +1001,13 @@ function getPanelMetaLabel(input: PanelMetaLabelInput): string {
   }
 
   if (input.isGameOver && input.isPvpMatch) {
-    return getPvpSettlementText(input.pvpStatus, input.players);
+    const settlement = getPvpSettlementText(input.pvpStatus, input.players);
+
+    if (input.isOnlinePvp && input.syncNotice) {
+      return `${input.syncNotice}。${settlement}`;
+    }
+
+    return settlement;
   }
 
   if (input.isGameOver) {
@@ -992,6 +1016,10 @@ function getPanelMetaLabel(input: PanelMetaLabelInput): string {
 
   if (input.isPvpMatch && input.isOnlinePvp && input.syncNotice) {
     return input.syncNotice;
+  }
+
+  if (input.isPvpMatch && input.isOnlinePvp) {
+    return getOnlinePvpPlayText(input.players, input.pvpConnectionStatus);
   }
 
   if (input.isReviving) {
@@ -1003,6 +1031,20 @@ function getPanelMetaLabel(input: PanelMetaLabelInput): string {
   }
 
   return "";
+}
+
+function getOnlinePvpPlayText(players: readonly PlayerUiInput[], status: PvpConnectionStatus): string {
+  const localPlayer = players.find((player) => player.inputOrigin === "local");
+  const remotePlayer = players.find((player) => player.inputOrigin === "remote");
+  const localLabel = localPlayer?.label ?? "P1";
+  const opponentLabel = remotePlayer?.label ?? "对手";
+  const opponentStatus = status === "reconnecting"
+    ? "正在重连"
+    : status === "disconnected" || status === "error"
+      ? "已退出"
+      : "已连接";
+
+  return `你是 ${localLabel} · 对手 ${opponentLabel} ${opponentStatus}`;
 }
 
 function getPvpSettlementText(pvpStatus: string | null, players: readonly PlayerUiInput[]): string {
