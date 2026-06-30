@@ -111,6 +111,8 @@ class FakeElement extends EventTarget {
   public value = "";
   public placeholder = "";
   public readOnly = false;
+  public focusCallCount = 0;
+  public lastFocusOptions: FocusOptions | undefined;
   private readonly attributes = new Map<string, string>();
   private readonly rect: FakeRect;
   private readonly pointerCaptures = new Set<number>();
@@ -152,6 +154,11 @@ class FakeElement extends EventTarget {
 
   public hasAttribute(name: string): boolean {
     return this.attributes.has(name);
+  }
+
+  public focus(options?: FocusOptions): void {
+    this.focusCallCount += 1;
+    this.lastFocusOptions = options;
   }
 
   public setPointerCapture(pointerId: number): void {

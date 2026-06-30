@@ -10,6 +10,7 @@
     "build:pages": "vite build",
     "loadtest:pvp": "node --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs scripts/pvp-load-test.ts",
     "smoke:pvp-remote": "node --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs scripts/pvp-remote-smoke.ts",
+    "smoke:pvp-remote-match": "node --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs scripts/pvp-remote-match-smoke.ts",
     "test": "node --test --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs tests/*.test.ts",
     "dev:pvp-server": "node --watch --experimental-strip-types --loader ./tests/ts-resolve-loader.mjs server/index.ts",
     "build:pvp-server": "tsc -p tsconfig.server.json",

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import type { ClientToServerMessage, PvpRoomPlayer, ServerToClientMessage } from "../src/pvp/net/protocol.ts";
@@ -167,6 +168,16 @@ class MemoryStorage {
 }
 
 const PVP_SESSION_TOKEN_STORAGE_KEY = "snake1:pvp-session-token";
+
+function getFocusProbe(input: HTMLInputElement): {
+  readonly focusCallCount: number;
+  readonly lastFocusOptions: FocusOptions | undefined;
+} {
+  return input as HTMLInputElement & {
+    readonly focusCallCount: number;
+    readonly lastFocusOptions: FocusOptions | undefined;
+  };
+}
 
 function getLastClientMessage(socket: FakeSocket): ClientToServerMessage | undefined {
   const messages = socket.getClientMessages();
@@ -576,6 +587,18 @@ test("switching from auto matchmaking to invite ignores the old socket close", (
   }
 });
 
+test("room code input markup keeps placeholder and autocomplete as separate attributes", () => {
+  const html = readFileSync("index.html", "utf8");
+  const inputTag = html.match(/<input\b[^>]*\bid="room-code-input"[^>]*>/u)?.[0];
+
+  assert.ok(inputTag, "expected #room-code-input in index.html");
+  assert.match(inputTag, /\btype="text"/u);
+  assert.match(inputTag, /\binputmode="text"/u);
+  assert.match(inputTag, /\bplaceholder="输入房间码"/u);
+  assert.match(inputTag, /\bautocomplete="off"/u);
+  assert.doesNotMatch(inputTag, /placeholder="[^"]*autocomplete=/u);
+});
+
 test("join room flow can submit a room code", () => {
   const socketHarness = new FakeSocketFactoryHarness();
   const harness = createGameHarness({
@@ -592,6 +615,9 @@ test("join room flow can submit a room code", () => {
 
     assert.equal(harness.ui.roomCodeField.hidden, false);
     assert.equal(harness.ui.joinRoomButton.textContent, "加入房间");
+    assert.equal(harness.ui.roomCodeInput.readOnly, false);
+    assert.equal(getFocusProbe(harness.ui.roomCodeInput).focusCallCount, 1);
+    assert.deepEqual(getFocusProbe(harness.ui.roomCodeInput).lastFocusOptions, { preventScroll: true });
 
     harness.ui.roomCodeInput.value = "ab12";
     dispatchInput(harness.ui.roomCodeInput);

@@ -1547,6 +1547,8 @@ export class Game {
     }
 
     this.pvpConnection.openJoinRoomEntry();
+    this.syncUi(true);
+    this.focusRoomCodeInput();
   };
 
   private readonly handleReadyRoomPointer = (event: PointerEvent): void => {
@@ -1574,6 +1576,14 @@ export class Game {
     this.pvpConnection.updateJoinCode(this.ui.roomCodeInput.value);
     this.syncUi(true);
   };
+
+  private focusRoomCodeInput(): void {
+    if (this.ui.roomCodeField.hidden || this.ui.roomCodeInput.readOnly) {
+      return;
+    }
+
+    this.ui.roomCodeInput.focus({ preventScroll: true });
+  }
 
   private readonly handleContinuePointer = (event: PointerEvent): void => {
     event.preventDefault();
