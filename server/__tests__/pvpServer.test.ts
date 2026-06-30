@@ -10,7 +10,7 @@ import { createPvpServer } from "../pvpServer.js";
 import type { PvpServerRuntime } from "../pvpServer.js";
 import type { ServerToClientMessage } from "../../src/pvp/net/protocol.js";
 import { validateServerMessage } from "../../src/pvp/net/validation.js";
-import { PVP_OPENING_SAFETY_TICKS } from "../../src/pvp/shared/pvpGame.js";
+import { getPvpMovementTicksPerStep, PVP_TARGET_STEP_MS } from "../../src/pvp/shared/pvpGame.js";
 
 const TEST_TIMEOUT_MS = 10_000;
 
@@ -72,6 +72,9 @@ test("GET /metrics.json returns live room and queue counters", async () => {
     assert.equal(body.maxConnections, DEFAULT_PVP_SERVER_CONFIG.maxConnections);
     assert.equal(body.maxRooms, DEFAULT_PVP_SERVER_CONFIG.maxRooms);
     assert.equal(body.maxQueue, DEFAULT_PVP_SERVER_CONFIG.maxQueue);
+    assert.equal(body.tickRate, DEFAULT_PVP_SERVER_CONFIG.tickRate);
+    assert.equal(body.inputDelayTicks, DEFAULT_PVP_SERVER_CONFIG.inputDelayTicks);
+    assert.equal(body.pvpTargetStepMs, PVP_TARGET_STEP_MS);
     assert.equal(typeof body.uptime, "number");
 
     await closeSocket(first.socket);
@@ -1115,8 +1118,9 @@ test("playing room opening stays alive without immediate player input", async ()
   try {
     const { first, second, room } = await startMatchedGame(server);
     let latestTick = 0;
+    const targetTick = 60 * 10;
 
-    while (latestTick < PVP_OPENING_SAFETY_TICKS) {
+    while (latestTick < targetTick) {
       const [firstSnapshot, secondSnapshot] = await Promise.all([
         readUntilType(first, "snapshot", (message) => message.tick > latestTick),
         readUntilType(second, "snapshot", (message) => message.tick > latestTick),
@@ -1134,6 +1138,7 @@ test("playing room opening stays alive without immediate player input", async ()
 
     assert.equal(room.phase, "playing");
     assert.equal(room.lastGameOver, undefined);
+    assert.equal(room.gameState?.match.movementStep, Math.floor(targetTick / getPvpMovementTicksPerStep(60)));
     assert.equal(metricsResponse.status, 200);
     assert.equal(metrics.totalGameOvers, 0);
 
@@ -1201,11 +1206,12 @@ for (const scenario of [
         readUntilType(first, "gameOver"),
         readUntilType(second, "gameOver"),
       ]);
+      const expectedFinalTick = room.gameState?.movementTicksPerStep ?? getPvpMovementTicksPerStep(20);
 
       assert.deepEqual(firstGameOver, secondGameOver);
       assert.equal(firstGameOver.winner, scenario.expected.winner);
       assert.equal(firstGameOver.reason, scenario.expected.reason);
-      assert.equal(firstGameOver.finalTick, 1);
+      assert.equal(firstGameOver.finalTick, expectedFinalTick);
 
       await closeSocket(first.socket);
       await closeSocket(second.socket);

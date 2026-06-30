@@ -128,6 +128,7 @@ import {
   createPvpPlayers,
   createPvpRuntime,
   createPvpSnapshot,
+  getPvpMovementStepForTick,
   recordPvpInput,
   type PvpGameSnapshot,
   type PvpRuntimeState,
@@ -994,6 +995,7 @@ export class Game {
 
     const runtime = session.runtime;
     runtime.match.tick = message.tick;
+    runtime.match.movementStep = getPvpMovementStepForTick(runtime);
     runtime.match.winnerId = null;
 
     if (message.phase === "finished") {
@@ -1688,6 +1690,7 @@ export class Game {
     session.runtime.match.phase = "gameOver";
     session.runtime.match.winnerId = message.winner === "draw" ? null : message.winner;
     session.runtime.match.tick = message.finalTick;
+    session.runtime.match.movementStep = getPvpMovementStepForTick(session.runtime);
     this.syncOnlinePvpRuntimeState({ authoritativeGameOver: message });
     this.syncUi(true);
   };

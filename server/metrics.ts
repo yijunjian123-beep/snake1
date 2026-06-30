@@ -1,3 +1,4 @@
+import { PVP_TARGET_STEP_MS } from "../src/pvp/shared/pvpGame.js";
 import type { PvpServerConfig } from "./config.js";
 import type { ConnectionRegistry } from "./connectionRegistry.js";
 import type { MatchmakingQueue } from "./matchmakingQueue.js";
@@ -41,6 +42,9 @@ export interface PvpServerMetricsSnapshot extends PvpServerMetricsCounters {
   readonly maxConnections: number;
   readonly maxRooms: number;
   readonly maxQueue: number;
+  readonly tickRate: number;
+  readonly inputDelayTicks: number;
+  readonly pvpTargetStepMs: number;
 }
 
 export interface PvpMetricsContext {
@@ -130,6 +134,9 @@ export function createPvpMetricsSnapshot(
     maxConnections: context.config.maxConnections,
     maxRooms: context.config.maxRooms,
     maxQueue: context.config.maxQueue,
+    tickRate: context.config.tickRate,
+    inputDelayTicks: context.config.inputDelayTicks,
+    pvpTargetStepMs: PVP_TARGET_STEP_MS,
     ...context.metrics,
   };
 }

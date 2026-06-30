@@ -6,6 +6,7 @@ import type { ClientToServerMessage, PvpRoomPlayer, ServerToClientMessage } from
 import type { WebSocketCloseEventLike, WebSocketFactory, WebSocketLike, WebSocketMessageEventLike } from "../src/pvp/net/PvpClient.ts";
 import { createPvpConnectionController, resolvePvpWebSocketUrl } from "../src/pvp/net/usePvpConnection.ts";
 import type { GameSnapshot } from "../src/game/types.ts";
+import { getPvpMovementTicksPerStep } from "../src/pvp/shared/pvpGame.ts";
 import { createGameHarness } from "./test-support.ts";
 
 function dispatchPointerUp(target: EventTarget): void {
@@ -213,6 +214,15 @@ function bootOnlinePvpHarness(
   });
 
   return socket;
+}
+
+function advanceOnlinePvpTicks(internals: Record<string, unknown>, tickRate: number, ticks: number): void {
+  const advanceOnlinePvp = internals.advanceOnlinePvp as (delta: number) => void;
+  const tickIntervalMs = 1_000 / tickRate;
+
+  for (let index = 0; index < ticks; index += 1) {
+    advanceOnlinePvp.call(internals, tickIntervalMs);
+  }
 }
 
 function projectOnlineSnapshot(harness: ReturnType<typeof createGameHarness>): {
@@ -919,8 +929,7 @@ test("online PVP sends local input and queues peerInput through the same tick pa
       sequence: 5,
     });
 
-    (internals.advanceOnlinePvp as (delta: number) => void)(50);
-    (internals.advanceOnlinePvp as (delta: number) => void)(50);
+    advanceOnlinePvpTicks(internals, 20, getPvpMovementTicksPerStep(20));
 
     assert.equal((internals.createSnapshot as () => GameSnapshot)().players.find((player) => player.id === "p1")?.direction, "up");
     assert.equal((internals.createSnapshot as () => GameSnapshot)().players.find((player) => player.id === "p2")?.direction, "up");
@@ -1094,8 +1103,7 @@ function runOnlineReplay(playerSlot: "p1" | "p2"): ReturnType<typeof projectOnli
       direction: "up",
     });
 
-    (internals.advanceOnlinePvp as (delta: number) => void)(50);
-    (internals.advanceOnlinePvp as (delta: number) => void)(50);
+    advanceOnlinePvpTicks(internals, 20, getPvpMovementTicksPerStep(20));
 
     return projectOnlineReplayDelta(before, projectOnlineSnapshot(harness));
   } finally {

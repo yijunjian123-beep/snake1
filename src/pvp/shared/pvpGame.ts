@@ -28,9 +28,10 @@ export const PVP_BOARD_COLUMNS = 28;
 export const PVP_BOARD_ROWS = 18;
 export const PVP_STARTING_LENGTH = 4;
 export const PVP_TARGET_FOOD_COUNT = 3;
+export const PVP_TARGET_STEP_MS = 360;
 export const PVP_MIN_INPUT_INTERVAL_MS = 25;
 export const PVP_MAX_DIRECTION_QUEUE_LENGTH = 2;
-export const PVP_OPENING_SAFETY_TICKS = 60;
+export const PVP_OPENING_SAFETY_STEPS = 30;
 export const PVP_INITIAL_DIRECTIONS: Readonly<Record<PlayerSlot, Direction>> = {
   p1: "right",
   p2: "right",
@@ -79,13 +80,16 @@ export interface PvpPlayerRuntime {
 export interface PvpRuntimeMatch {
   mode: MatchMode;
   phase: GamePhase;
+  startTick: number;
   tick: number;
+  movementStep: number;
   winnerId: PlayerSlot | null;
 }
 
 export interface PvpRuntimeState {
   grid: GridMetrics;
   match: PvpRuntimeMatch;
+  movementTicksPerStep: number;
   players: [PvpPlayerRuntime, PvpPlayerRuntime];
   foods: GridCell[];
   starCores: StarCore[];
@@ -128,14 +132,18 @@ export function createPvpBoardGrid(cellSize = 1, offsetX = 0, offsetY = 0): Grid
 export function createPvpRuntime(config: PvpRuntimeConfig): PvpRuntimeState {
   const random = createPrng(config.seed);
   const players = createPvpPlayers(config.grid);
+  const movementTicksPerStep = getPvpMovementTicksPerStep(config.tickRate);
   const runtime: PvpRuntimeState = {
     grid: config.grid,
     match: {
       mode: config.mode ?? "online-pvp",
       phase: "playing",
+      startTick: config.startTick,
       tick: config.startTick,
+      movementStep: 0,
       winnerId: null,
     },
+    movementTicksPerStep,
     players,
     foods: [],
     starCores: [],
@@ -145,6 +153,18 @@ export function createPvpRuntime(config: PvpRuntimeConfig): PvpRuntimeState {
 
   runtime.foods = createPvpFoods(runtime);
   return runtime;
+}
+
+export function getPvpMovementTicksPerStep(tickRate: number): number {
+  if (!Number.isFinite(tickRate) || tickRate <= 0) {
+    return 1;
+  }
+
+  return Math.max(1, Math.round((tickRate * PVP_TARGET_STEP_MS) / 1_000));
+}
+
+export function getPvpMovementStepForTick(runtime: PvpRuntimeState, tick = runtime.match.tick): number {
+  return Math.max(0, Math.floor((tick - runtime.match.startTick) / runtime.movementTicksPerStep));
 }
 
 export function createPvpPlayers(grid: GridMetrics = createPvpBoardGrid()): [PvpPlayerRuntime, PvpPlayerRuntime] {
@@ -269,6 +289,15 @@ export function advancePvpTick(runtime: PvpRuntimeState): PvpAdvanceResult {
 
   runtime.match.tick += 1;
   applyPvpInputsForTick(runtime, runtime.match.tick);
+
+  if (!shouldAdvancePvpMovement(runtime)) {
+    return {
+      snapshot: createPvpSnapshot(runtime),
+      gameOver: null,
+    };
+  }
+
+  runtime.match.movementStep = getPvpMovementStepForTick(runtime);
 
   const evaluations: Array<{
     readonly playerId: PlayerSlot;
@@ -563,6 +592,12 @@ function resolvePvpOutcome(runtime: PvpRuntimeState): {
   };
 }
 
+function shouldAdvancePvpMovement(runtime: PvpRuntimeState): boolean {
+  const elapsedTicks = runtime.match.tick - runtime.match.startTick;
+
+  return elapsedTicks > 0 && elapsedTicks % runtime.movementTicksPerStep === 0;
+}
+
 function finishPvpPlayer(player: PvpPlayerRuntime, reason: DeathReason): void {
   player.lifecycle.phase = "gameOver";
   player.lifecycle.deathReason = reason;
@@ -622,7 +657,7 @@ function shouldUseOpeningSafetyTurn(
 ): boolean {
   if (
     usedQueuedDirection
-    || runtime.match.tick > PVP_OPENING_SAFETY_TICKS
+    || runtime.match.movementStep > PVP_OPENING_SAFETY_STEPS
     || player.snake.length < PVP_STARTING_LENGTH
     || primaryEvaluation?.isOutOfBounds !== true
   ) {
