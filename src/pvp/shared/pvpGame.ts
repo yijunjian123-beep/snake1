@@ -3,7 +3,7 @@ import { buildFoodSpawnContext } from "../../game/spawnRuntime.js";
 import { spawnFoodCell } from "../../game/foodSpawn.js";
 import { commitSnakeMovement, evaluateSnakeAdvance, pickAdvanceDirection } from "../../game/snakeMovementSystem.js";
 import { resolveMultiplayerSnakeCollisions } from "../../game/collisionSystem.js";
-import { OPPOSITE_DIRECTIONS } from "../../game/direction.js";
+import { OPPOSITE_DIRECTIONS, turnLeft, turnRight } from "../../game/direction.js";
 import type {
   DeathReason,
   Direction,
@@ -30,9 +30,10 @@ export const PVP_STARTING_LENGTH = 4;
 export const PVP_TARGET_FOOD_COUNT = 3;
 export const PVP_MIN_INPUT_INTERVAL_MS = 25;
 export const PVP_MAX_DIRECTION_QUEUE_LENGTH = 2;
+export const PVP_OPENING_SAFETY_TICKS = 60;
 export const PVP_INITIAL_DIRECTIONS: Readonly<Record<PlayerSlot, Direction>> = {
   p1: "right",
-  p2: "left",
+  p2: "right",
 };
 
 export interface PvpPlayerInputRecord {
@@ -150,8 +151,8 @@ export function createPvpPlayers(grid: GridMetrics = createPvpBoardGrid()): [Pvp
   const firstHead = getPvpStartingHead(grid.columns, grid.rows, "p1");
   const secondHead = getPvpStartingHead(grid.columns, grid.rows, "p2");
   return [
-    createPvpPlayer(grid, "p1", firstHead, "right"),
-    createPvpPlayer(grid, "p2", secondHead, "left"),
+    createPvpPlayer(grid, "p1", firstHead, PVP_INITIAL_DIRECTIONS.p1),
+    createPvpPlayer(grid, "p2", secondHead, PVP_INITIAL_DIRECTIONS.p2),
   ];
 }
 
@@ -281,9 +282,15 @@ export function advancePvpTick(runtime: PvpRuntimeState): PvpAdvanceResult {
       continue;
     }
 
-    const intendedDirection = player.movement.directionQueue.shift() ?? player.movement.direction;
+    const queuedDirection = player.movement.directionQueue.shift();
+    const intendedDirection = queuedDirection ?? player.movement.direction;
     const context = buildPvpMovementContext(runtime, player, false);
-    const selection = pickAdvanceDirection(context, intendedDirection, [player.movement.direction]);
+    const primaryEvaluation = evaluateSnakeAdvance(context, intendedDirection);
+    const selection = pickAdvanceDirection(
+      context,
+      intendedDirection,
+      getPvpAdvanceFallbackDirections(runtime, player, intendedDirection, queuedDirection !== undefined, primaryEvaluation),
+    );
     const evaluation = evaluateSnakeAdvance(context, selection.direction);
 
     if (!evaluation) {
@@ -576,10 +583,53 @@ function getPvpPlayerInputState(inputState: PvpInputState, playerId: PlayerSlot)
 
 function getPvpStartingHead(columns: number, rows: number, playerId: PlayerSlot): GridCell {
   const isFirst = playerId === "p1";
+  const openingColumn = Math.min(
+    columns - 1,
+    Math.max(PVP_STARTING_LENGTH - 1, Math.floor(columns * 0.16)),
+  );
+
   return {
-    column: isFirst ? Math.max(PVP_STARTING_LENGTH, Math.floor(columns * 0.32)) : Math.min(columns - PVP_STARTING_LENGTH - 1, Math.ceil(columns * 0.68)),
-    row: clampGridIndex(isFirst ? Math.floor(rows * 0.35) : Math.ceil(rows * 0.65), rows),
+    column: openingColumn,
+    row: clampGridIndex(isFirst ? Math.floor(rows * 0.32) : Math.ceil(rows * 0.68), rows),
   };
+}
+
+function getPvpAdvanceFallbackDirections(
+  runtime: PvpRuntimeState,
+  player: PvpPlayerRuntime,
+  intendedDirection: Direction,
+  usedQueuedDirection: boolean,
+  primaryEvaluation: ReturnType<typeof evaluateSnakeAdvance>,
+): Direction[] {
+  const fallbacks = [player.movement.direction];
+
+  if (!shouldUseOpeningSafetyTurn(runtime, player, usedQueuedDirection, primaryEvaluation)) {
+    return fallbacks;
+  }
+
+  const preferredTurn = turnRight(intendedDirection);
+  const secondaryTurn = turnLeft(intendedDirection);
+
+  fallbacks.push(preferredTurn, secondaryTurn);
+  return fallbacks;
+}
+
+function shouldUseOpeningSafetyTurn(
+  runtime: PvpRuntimeState,
+  player: PvpPlayerRuntime,
+  usedQueuedDirection: boolean,
+  primaryEvaluation: ReturnType<typeof evaluateSnakeAdvance>,
+): boolean {
+  if (
+    usedQueuedDirection
+    || runtime.match.tick > PVP_OPENING_SAFETY_TICKS
+    || player.snake.length < PVP_STARTING_LENGTH
+    || primaryEvaluation?.isOutOfBounds !== true
+  ) {
+    return false;
+  }
+
+  return getPvpPlayerInputState(runtime.inputState, player.id).seenSequences.size === 0;
 }
 
 function createStartingSnake(head: GridCell, direction: Direction): GridCell[] {

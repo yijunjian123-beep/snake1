@@ -10,6 +10,7 @@ import { createPvpServer } from "../pvpServer.js";
 import type { PvpServerRuntime } from "../pvpServer.js";
 import type { ServerToClientMessage } from "../../src/pvp/net/protocol.js";
 import { validateServerMessage } from "../../src/pvp/net/validation.js";
+import { PVP_OPENING_SAFETY_TICKS } from "../../src/pvp/shared/pvpGame.js";
 
 const TEST_TIMEOUT_MS = 10_000;
 
@@ -1100,6 +1101,41 @@ test("playing room broadcasts matching authoritative snapshots to both players",
     assert.match(firstSnapshot.stateHash, /^pvp:/);
     assert.ok(firstSnapshot.snakeHeads.p1);
     assert.ok(firstSnapshot.snakeHeads.p2);
+
+    await closeSocket(first.socket);
+    await closeSocket(second.socket);
+  } finally {
+    await server.runtime.close();
+  }
+});
+
+test("playing room opening stays alive without immediate player input", async () => {
+  const server = await startTestServer({ countdownMs: 20, tickRate: 60 });
+
+  try {
+    const { first, second, room } = await startMatchedGame(server);
+    let latestTick = 0;
+
+    while (latestTick < PVP_OPENING_SAFETY_TICKS) {
+      const [firstSnapshot, secondSnapshot] = await Promise.all([
+        readUntilType(first, "snapshot", (message) => message.tick > latestTick),
+        readUntilType(second, "snapshot", (message) => message.tick > latestTick),
+      ]);
+
+      assert.deepEqual(firstSnapshot, secondSnapshot);
+      assert.equal(firstSnapshot.phase, "playing");
+      assert.equal(firstSnapshot.alive.p1, true);
+      assert.equal(firstSnapshot.alive.p2, true);
+      latestTick = firstSnapshot.tick;
+    }
+
+    const metricsResponse = await fetch(`http://127.0.0.1:${server.port}/metrics.json`);
+    const metrics = await metricsResponse.json() as Record<string, unknown>;
+
+    assert.equal(room.phase, "playing");
+    assert.equal(room.lastGameOver, undefined);
+    assert.equal(metricsResponse.status, 200);
+    assert.equal(metrics.totalGameOvers, 0);
 
     await closeSocket(first.socket);
     await closeSocket(second.socket);

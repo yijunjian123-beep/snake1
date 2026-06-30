@@ -125,6 +125,7 @@ import type { ServerGameOverMessage, ServerPeerInputMessage, ServerSnapshotMessa
 import {
   advancePvpTick,
   createPvpBoardGrid,
+  createPvpPlayers,
   createPvpRuntime,
   createPvpSnapshot,
   recordPvpInput,
@@ -2203,27 +2204,18 @@ export class Game {
       return;
     }
 
-    const localIsFirst = localPlayerId === "p1";
-    const firstHead = {
-      column: Math.max(STARTING_LENGTH, Math.floor(this.grid.columns * 0.32)),
-      row: Math.floor(this.grid.rows / 2),
-    };
-    const secondHead = {
-      column: Math.min(this.grid.columns - STARTING_LENGTH - 1, Math.ceil(this.grid.columns * 0.68)),
-      row: Math.floor(this.grid.rows / 2),
-    };
+    const [firstRuntimePlayer, secondRuntimePlayer] = createPvpPlayers(this.grid);
+    const localRuntimePlayer = localPlayerId === "p1" ? firstRuntimePlayer : secondRuntimePlayer;
+    const remoteRuntimePlayer = localPlayerId === "p1" ? secondRuntimePlayer : firstRuntimePlayer;
+    const localHead = localRuntimePlayer.snake[0] ?? { column: 0, row: 0 };
+    const remoteHead = remoteRuntimePlayer.snake[0] ?? { column: 0, row: 0 };
 
-    const localHead = localIsFirst ? firstHead : secondHead;
-    const remoteHead = localIsFirst ? secondHead : firstHead;
-    const localDirection = localIsFirst ? "right" : "left";
-    const remoteDirection = localIsFirst ? "left" : "right";
-
-    localPlayer.snake = this.createStartingSnakeFrom(localHead, localDirection);
-    localPlayer.movement.direction = localDirection;
+    localPlayer.snake = localRuntimePlayer.snake.map((cell) => ({ ...cell }));
+    localPlayer.movement.direction = localRuntimePlayer.movement.direction;
     localPlayer.lifecycle.birthCell = { ...localHead };
 
-    remotePlayer.snake = this.createStartingSnakeFrom(remoteHead, remoteDirection);
-    remotePlayer.movement.direction = remoteDirection;
+    remotePlayer.snake = remoteRuntimePlayer.snake.map((cell) => ({ ...cell }));
+    remotePlayer.movement.direction = remoteRuntimePlayer.movement.direction;
     remotePlayer.lifecycle.birthCell = { ...remoteHead };
 
     for (const player of this.players) {

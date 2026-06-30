@@ -230,7 +230,6 @@ function projectOnlineSnapshot(harness: ReturnType<typeof createGameHarness>): {
   };
   const snapshot = internals.createSnapshot();
   const localPlayerId = internals.onlineSession?.localPlayerId;
-  const shouldMirror = localPlayerId === "p2";
 
   assert.ok(localPlayerId);
 
@@ -249,15 +248,15 @@ function projectOnlineSnapshot(harness: ReturnType<typeof createGameHarness>): {
     },
     local: {
       inputOrigin: localPlayer.inputOrigin,
-      direction: shouldMirror ? mirrorDirection(localPlayer.direction) : localPlayer.direction,
+      direction: localPlayer.direction,
       score: localPlayer.score,
-      snake: localPlayer.snake.map((cell) => (shouldMirror ? mirrorCell(cell, snapshot.grid.columns) : { ...cell })),
+      snake: localPlayer.snake.map((cell) => ({ ...cell })),
     },
     remote: {
       inputOrigin: remotePlayer.inputOrigin,
-      direction: shouldMirror ? mirrorDirection(remotePlayer.direction) : remotePlayer.direction,
+      direction: remotePlayer.direction,
       score: remotePlayer.score,
-      snake: remotePlayer.snake.map((cell) => (shouldMirror ? mirrorCell(cell, snapshot.grid.columns) : { ...cell })),
+      snake: remotePlayer.snake.map((cell) => ({ ...cell })),
     },
   };
 }
@@ -313,24 +312,6 @@ function projectOnlineReplayDelta(
       }),
     },
   };
-}
-
-function mirrorCell(cell: Readonly<{ column: number; row: number }>, width: number): { column: number; row: number } {
-  return {
-    column: width - 1 - cell.column,
-    row: cell.row,
-  };
-}
-
-function mirrorDirection(direction: string): string {
-  switch (direction) {
-    case "left":
-      return "right";
-    case "right":
-      return "left";
-    default:
-      return direction;
-  }
 }
 
 test("resolvePvpWebSocketUrl falls back to the current host in dev", () => {
