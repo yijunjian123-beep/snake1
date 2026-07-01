@@ -1,3 +1,4 @@
+import { clamp } from "./renderCanvasUtils";
 import type { CanvasSize, GameSnapshot } from "./types";
 
 export interface OverlayPassOptions {
@@ -62,7 +63,11 @@ function drawBlackHoleAlert(
   const bannerWidth = Math.min(maxWidth, textWidth + horizontalPadding * 2);
   const bannerHeight = fontSize + verticalPadding * 2;
   const centerX = size.width * 0.5;
-  const centerY = Math.max(76, Math.min(size.height * 0.2, grid.offsetY - grid.cellSize * 0.35));
+  const lifeBarClearance = Math.max(36, grid.cellSize * 1.1);
+  const preferredCenterY = grid.offsetY + lifeBarClearance + bannerHeight * 0.5;
+  const minCenterY = bannerHeight * 0.5 + 10;
+  const maxCenterY = Math.min(size.height - bannerHeight * 0.5 - 10, grid.offsetY + grid.cellSize * 2.25);
+  const centerY = clamp(preferredCenterY, minCenterY, Math.max(minCenterY, maxCenterY));
   const bannerX = centerX - bannerWidth * 0.5;
   const bannerY = centerY - bannerHeight * 0.5;
   const pulse = reducedMotionPreferred ? 1 : 0.92 + Math.sin(time * 5.5) * 0.08;
