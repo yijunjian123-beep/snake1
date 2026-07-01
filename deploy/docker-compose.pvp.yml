@@ -13,7 +13,7 @@ services:
       PVP_MAX_QUEUE: "250"
       PVP_HEARTBEAT_INTERVAL_MS: "10000"
       PVP_CONNECTION_TIMEOUT_MS: "30000"
-      ALLOWED_ORIGINS: "https://your-github-pages-domain.github.io,https://your-custom-domain.com"
+      ALLOWED_ORIGINS: "https://yijunjian123-beep.github.io"
       # LOG_LEVEL: silent
     ports:
       - "127.0.0.1:8787:8787"
