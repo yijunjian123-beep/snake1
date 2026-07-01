@@ -23,6 +23,7 @@ import type {
   PvpWinner,
   RoomCode,
   RoomPhase,
+  ServerSnapshotMessage,
   ServerToClientMessage,
 } from "./protocol.js";
 
@@ -211,6 +212,13 @@ function isPvpPlayerSnapshotList(value: unknown): value is readonly PvpPlayerSna
   return true;
 }
 
+export function hasFullPvpSnapshot(message: ServerSnapshotMessage): message is ServerSnapshotMessage & {
+  readonly foods: readonly PvpGridCell[];
+  readonly players: readonly PvpPlayerSnapshot[];
+} {
+  return isGridCellList(message.foods) && isPvpPlayerSnapshotList(message.players);
+}
+
 function isRoomPlayer(value: unknown): value is PvpRoomPlayer {
   if (!isRecord(value)) {
     return false;
@@ -368,8 +376,10 @@ function validateServerRecord(message: Record<string, unknown>): boolean {
         && isValidStateHash(message.stateHash)
         && isSnakeHeads(message.snakeHeads)
         && isAliveMap(message.alive)
-        && isGridCellList(message.foods)
-        && isPvpPlayerSnapshotList(message.players);
+        && (
+          (message.foods === undefined && message.players === undefined)
+          || (isGridCellList(message.foods) && isPvpPlayerSnapshotList(message.players))
+        );
     case "gameOver":
       return isWinner(message.winner) && isGameOverReason(message.reason) && isValidTick(message.finalTick);
     case "opponentLeft":

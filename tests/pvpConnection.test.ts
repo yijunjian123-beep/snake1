@@ -1016,6 +1016,99 @@ test("server snapshots fully replace online state and stale snapshots are ignore
   }
 });
 
+test("legacy server snapshots advance online state and show compatibility notice", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: "ws://example.test/ws",
+      socketFactory: socketHarness.factory,
+    },
+  });
+
+  try {
+    const socket = bootOnlinePvpHarness(harness, socketHarness, "p1");
+    const internals = harness.game as unknown as Record<string, unknown>;
+
+    socket.emitServerMessage({
+      type: "snapshot",
+      phase: "playing",
+      tick: 4,
+      stateHash: "pvp:legacy_tick_4",
+      snakeHeads: {
+        p1: { column: 6, row: 5 },
+        p2: { column: 6, row: 13 },
+      },
+      alive: { p1: true, p2: true },
+    });
+
+    let snapshot = (internals.createSnapshot as () => GameSnapshot)();
+    assert.equal(snapshot.match.tick, 4);
+    assert.deepEqual(snapshot.players.find((player) => player.id === "p1")?.snake[0], { column: 6, row: 5 });
+    assert.deepEqual(snapshot.players.find((player) => player.id === "p2")?.snake[0], { column: 6, row: 13 });
+    assert.equal(harness.ui.panelMetaLabel.textContent, "服务端版本较旧，正在兼容模式运行");
+
+    (internals.handleInput as (command: {
+      readonly action: "move-up";
+      readonly kind: "pressed";
+      readonly source: "keyboard";
+      readonly playerId: "p1";
+    }) => void)({
+      action: "move-up",
+      kind: "pressed",
+      source: "keyboard",
+      playerId: "p1",
+    });
+
+    assert.deepEqual(getLastClientMessage(socket), {
+      type: "input",
+      seq: 1,
+      tick: 6,
+      direction: "up",
+    });
+
+    socket.emitServerMessage({
+      type: "snapshot",
+      phase: "playing",
+      tick: 5,
+      stateHash: "pvp:legacy_tick_5",
+      snakeHeads: {
+        p1: { column: 7, row: 5 },
+        p2: { column: 7, row: 13 },
+      },
+      alive: { p1: true, p2: true },
+    });
+
+    snapshot = (internals.createSnapshot as () => GameSnapshot)();
+    assert.equal(snapshot.match.tick, 5);
+    assert.deepEqual(snapshot.players.find((player) => player.id === "p1")?.snake[0], { column: 7, row: 5 });
+  } finally {
+    harness.cleanup();
+  }
+});
+
+test("online active run shows disconnected status instead of ongoing match copy", () => {
+  const socketHarness = new FakeSocketFactoryHarness();
+  const harness = createGameHarness({
+    pvpConnectionOptions: {
+      url: "ws://example.test/ws",
+      socketFactory: socketHarness.factory,
+      maxReconnectAttempts: 0,
+    },
+  });
+
+  try {
+    const socket = bootOnlinePvpHarness(harness, socketHarness, "p1");
+
+    socket.emitClose({ code: 1006, reason: "network", wasClean: false });
+
+    assert.equal(harness.ui.unlockValueLabel.textContent, "连接已断开");
+    assert.equal(harness.ui.panelSecondaryLabel.textContent, "连接已断开");
+    assert.notEqual(harness.ui.unlockValueLabel.textContent, "对局进行中");
+  } finally {
+    harness.cleanup();
+  }
+});
+
 test("online PVP settlement can rematch or return to the PVP hall", () => {
   const socketHarness = new FakeSocketFactoryHarness();
   const harness = createGameHarness({

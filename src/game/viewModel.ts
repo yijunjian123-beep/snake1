@@ -418,7 +418,11 @@ export function buildUiSyncModel(input: UiSyncInput): UiSyncModel {
   const isOnlinePvp = input.match.mode === "online-pvp";
   const pvpPanel = isPvpRoom ? input.pvpPanel ?? null : null;
   const playerSummary = isPvpMatch ? getPlayerSummary(input.players ?? []) : null;
-  const pvpStatus = isPvpMatch ? getPvpStatus(input.match, input.players ?? []) : null;
+  const pvpStatus = isPvpMatch
+    ? isOnlinePvp
+      ? getOnlinePvpStatus(input.match, input.players ?? [], input.pvpConnectionStatus)
+      : getPvpStatus(input.match, input.players ?? [])
+    : null;
   const pvpConnectionState = getPvpConnectionState(input.pvpConnectionStatus);
   const panelPrimaryValue = isMainMenu
     ? "NEON SERPENT"
@@ -949,6 +953,18 @@ function getPvpStatus(match: MatchSnapshot, players: readonly PlayerUiInput[]): 
   }
 
   return null;
+}
+
+function getOnlinePvpStatus(match: MatchSnapshot, players: readonly PlayerUiInput[], status: PvpConnectionStatus): string | null {
+  if (status === "reconnecting") {
+    return "正在重连";
+  }
+
+  if (status === "disconnected" || status === "error") {
+    return "连接已断开";
+  }
+
+  return getPvpStatus(match, players);
 }
 
 function getPvpConnectionState(status: PvpConnectionStatus): "connected" | "disconnected" {

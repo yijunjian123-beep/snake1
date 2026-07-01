@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 
-import type { PlayerSlot, RoomCode, ServerToClientMessage } from "../src/pvp/net/protocol.js";
+import type { PlayerSlot, RoomCode, ServerSnapshotMessage, ServerToClientMessage } from "../src/pvp/net/protocol.js";
+import { validateServerMessage } from "../src/pvp/net/validation.js";
 
 interface RemoteMatchSmokeConfig {
   readonly metricsUrl: string;
@@ -17,6 +18,10 @@ interface ClientState {
   queued: boolean;
   matchFound: boolean;
   gameStarted: boolean;
+  snapshotCount: number;
+  firstSnapshotTick: number | null;
+  latestSnapshotTick: number | null;
+  snapshotShape: "legacy" | "full" | null;
   roomCode: RoomCode | null;
   playerSlot: PlayerSlot | null;
 }
@@ -25,6 +30,7 @@ interface MatchSmokeResult {
   readonly roomCode: RoomCode;
   readonly firstSlot: PlayerSlot;
   readonly secondSlot: PlayerSlot;
+  readonly snapshotShape: "legacy" | "full" | "mixed";
   readonly elapsedMs: number;
   readonly beforeMetrics: MetricsSummary;
   readonly afterMetrics: MetricsSummary;
@@ -57,6 +63,7 @@ async function main(): Promise<void> {
   console.log(`origin: ${config.origin ?? "(none)"}`);
   console.log(`matched room: ${result.roomCode}`);
   console.log(`player slots: ${result.firstSlot}/${result.secondSlot}`);
+  console.log(`snapshot shape: ${result.snapshotShape}`);
   console.log(`elapsed: ${result.elapsedMs} ms`);
   console.log(
     `metrics before connections/queue/countdown/playing/rooms/rejectedByRoomCapacity: `
@@ -186,7 +193,14 @@ async function runMatchSmoke(
     };
 
     const maybeSucceed = (): void => {
-      if (first === null || second === null || !first.gameStarted || !second.gameStarted) {
+      if (
+        first === null
+        || second === null
+        || !first.gameStarted
+        || !second.gameStarted
+        || !hasProgressedSnapshot(first)
+        || !hasProgressedSnapshot(second)
+      ) {
         return;
       }
 
@@ -197,6 +211,11 @@ async function runMatchSmoke(
 
       if (first.playerSlot === null || second.playerSlot === null || first.playerSlot === second.playerSlot) {
         fail(new Error(`clients received invalid player slots: ${first.playerSlot ?? "(none)"} / ${second.playerSlot ?? "(none)"}`));
+        return;
+      }
+
+      if (first.snapshotShape === null || second.snapshotShape === null) {
+        fail(new Error(`clients did not receive consumable snapshots: ${formatClientStates(first, second)}`));
         return;
       }
 
@@ -212,6 +231,7 @@ async function runMatchSmoke(
             roomCode: first.roomCode,
             firstSlot: first.playerSlot,
             secondSlot: second.playerSlot,
+            snapshotShape: first.snapshotShape === second.snapshotShape ? first.snapshotShape : "mixed",
             elapsedMs: Date.now() - startedAt,
             beforeMetrics,
             afterMetrics,
@@ -256,6 +276,10 @@ async function runMatchSmoke(
           client.gameStarted = true;
           maybeSucceed();
           return;
+        case "snapshot":
+          recordSnapshot(client, message);
+          maybeSucceed();
+          return;
         case "error":
           fail(new Error(`${client.label} received ${message.code}: ${message.message}`));
           return;
@@ -269,7 +293,6 @@ async function runMatchSmoke(
         case "opponentLeft":
         case "reconnectResult":
         case "peerInput":
-        case "snapshot":
         case "gameOver":
           return;
       }
@@ -287,6 +310,10 @@ async function runMatchSmoke(
         queued: false,
         matchFound: false,
         gameStarted: false,
+        snapshotCount: 0,
+        firstSnapshotTick: null,
+        latestSnapshotTick: null,
+        snapshotShape: null,
         roomCode: null,
         playerSlot: null,
       };
@@ -328,8 +355,21 @@ function formatClientStates(first: ClientState | null, second: ClientState | nul
   return [first, second]
     .map((client) => client === null
       ? "(not-created)"
-      : `${client.label}{welcomed=${String(client.welcomed)},queued=${String(client.queued)},matchFound=${String(client.matchFound)},gameStarted=${String(client.gameStarted)},roomCode=${client.roomCode ?? "none"},slot=${client.playerSlot ?? "none"},readyState=${client.socket.readyState}}`)
+      : `${client.label}{welcomed=${String(client.welcomed)},queued=${String(client.queued)},matchFound=${String(client.matchFound)},gameStarted=${String(client.gameStarted)},snapshots=${client.snapshotCount},firstTick=${client.firstSnapshotTick ?? "none"},latestTick=${client.latestSnapshotTick ?? "none"},snapshotShape=${client.snapshotShape ?? "none"},roomCode=${client.roomCode ?? "none"},slot=${client.playerSlot ?? "none"},readyState=${client.socket.readyState}}`)
     .join(" ");
+}
+
+function recordSnapshot(client: ClientState, message: ServerSnapshotMessage): void {
+  client.snapshotCount += 1;
+  client.firstSnapshotTick ??= message.tick;
+  client.latestSnapshotTick = message.tick;
+  client.snapshotShape = message.foods !== undefined && message.players !== undefined ? "full" : "legacy";
+}
+
+function hasProgressedSnapshot(client: ClientState): boolean {
+  return client.firstSnapshotTick !== null
+    && client.latestSnapshotTick !== null
+    && client.latestSnapshotTick > client.firstSnapshotTick;
 }
 
 async function fetchMetrics(url: string, timeoutMs: number): Promise<MetricsSummary> {
@@ -398,9 +438,10 @@ function parseMessage(data: WebSocket.RawData): ServerToClientMessage | null {
 
   try {
     const parsed = JSON.parse(text) as unknown;
+    const validation = validateServerMessage(parsed);
 
-    if (isRecord(parsed) && typeof parsed.type === "string") {
-      return parsed as ServerToClientMessage;
+    if (validation.ok) {
+      return validation.value;
     }
   } catch {
     return null;

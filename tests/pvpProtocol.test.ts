@@ -76,6 +76,14 @@ test("valid server messages are recognized by the shared protocol validator", ()
     {
       type: "snapshot",
       phase: "playing",
+      tick: 8,
+      stateHash: "tick_8_legacy_hash",
+      snakeHeads: { p1: { column: 4, row: 6 }, p2: { column: 22, row: 6 } },
+      alive: { p1: true, p2: true },
+    },
+    {
+      type: "snapshot",
+      phase: "playing",
       tick: 9,
       stateHash: "tick_9_hash",
       snakeHeads: { p1: { column: 4, row: 6 }, p2: null },
@@ -129,7 +137,7 @@ test("invalid messages are rejected without trusting unknown JSON", () => {
     { type: "ready", ready: "yes" },
     { type: "welcome", playerId: "x", sessionToken: "short", serverTime: 1 },
     { type: "roomState", roomCode: "AB12", phase: "lobby", players },
-    { type: "snapshot", phase: "playing", tick: 1, stateHash: "tick_1_hash", snakeHeads: { p1: null }, alive: { p1: true, p2: true } },
+    { type: "snapshot", phase: "playing", tick: 1, stateHash: "tick_1_hash", snakeHeads: { p1: null }, alive: { p1: true, p2: true }, foods: [] },
     { type: "gameStart", seed: 1, startTick: 0, tickRate: 120, playerSlots: ["p1", "p2"], inputDelayTicks: 3 },
   ];
 

@@ -260,9 +260,14 @@ export interface ServerSnapshotMessage {
   readonly stateHash: PvpStateHash;
   readonly snakeHeads: PvpSnakeHeads;
   readonly alive: PvpAliveMap;
+  readonly foods?: readonly PvpGridCell[];
+  readonly players?: readonly PvpPlayerSnapshot[];
+}
+
+export type ServerFullSnapshotMessage = ServerSnapshotMessage & {
   readonly foods: readonly PvpGridCell[];
   readonly players: readonly PvpPlayerSnapshot[];
-}
+};
 
 export interface ServerGameOverMessage {
   readonly type: "gameOver";

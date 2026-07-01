@@ -122,13 +122,13 @@ import type {
 import { createPvpConnectionController, resolvePvpWebSocketUrl, type PvpConnectionController, type PvpConnectionControllerOptions } from "../pvp/net/usePvpConnection.js";
 import type { PvpConnectionState } from "../pvp/net/state.js";
 import type { ServerGameOverMessage, ServerPeerInputMessage, ServerSnapshotMessage } from "../pvp/net/protocol.js";
+import { hasFullPvpSnapshot } from "../pvp/net/validation.js";
 import {
   createPvpBoardGrid,
   createPvpPlayers,
   createPvpRuntime,
   getPvpMovementStepForTick,
   recordPvpInput,
-  type PvpGameSnapshot,
   type PvpRuntimeState,
 } from "../pvp/shared/pvpGame.js";
 
@@ -147,7 +147,7 @@ interface OnlinePvpSessionState {
   readonly startTick: number;
   readonly tickRate: number;
   runtime: PvpRuntimeState;
-  latestSnapshot: PvpGameSnapshot | null;
+  latestSnapshot: ServerSnapshotMessage | null;
   lastSnapshotHash: string | null;
   lastSnapshotTick: number;
   lastServerGameOver: ServerGameOverMessage | null;
@@ -155,6 +155,8 @@ interface OnlinePvpSessionState {
   tickAccumulatorMs: number;
   nextSequence: number;
 }
+
+const LEGACY_PVP_SNAPSHOT_NOTICE = "服务端版本较旧，正在兼容模式运行";
 
 interface ResetMatchRunOptions {
   readonly seed?: number;
@@ -173,6 +175,26 @@ function normalizePvpDeathReason(reason: ServerGameOverMessage["reason"] | null)
     default:
       return "unknown";
   }
+}
+
+function moveLegacySnakeToHead(snake: readonly GridCell[], head: GridCell): GridCell[] {
+  const currentHead = snake[0];
+
+  if (currentHead === undefined) {
+    return [{ ...head }];
+  }
+
+  const deltaColumn = head.column - currentHead.column;
+  const deltaRow = head.row - currentHead.row;
+
+  if (deltaColumn === 0 && deltaRow === 0) {
+    return snake.map((cell) => ({ ...cell }));
+  }
+
+  return snake.map((cell) => ({
+    column: cell.column + deltaColumn,
+    row: cell.row + deltaRow,
+  }));
 }
 
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
@@ -986,6 +1008,11 @@ export class Game {
       return;
     }
 
+    if (!hasFullPvpSnapshot(message)) {
+      this.applyLegacyOnlinePvpSnapshotCorrection(message);
+      return;
+    }
+
     const runtime = session.runtime;
     runtime.match.tick = message.tick;
     runtime.match.movementStep = getPvpMovementStepForTick(runtime);
@@ -1030,7 +1057,42 @@ export class Game {
     this.discardConfirmedOnlineInputs(message);
   }
 
+  private applyLegacyOnlinePvpSnapshotCorrection(message: ServerSnapshotMessage): void {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return;
+    }
+
+    const runtime = session.runtime;
+    runtime.match.tick = message.tick;
+    runtime.match.movementStep = getPvpMovementStepForTick(runtime);
+    runtime.match.winnerId = null;
+    runtime.match.phase = message.phase === "finished" ? "gameOver" : "playing";
+
+    for (const runtimePlayer of runtime.players) {
+      const head = message.snakeHeads[runtimePlayer.id];
+      const isAlive = message.alive[runtimePlayer.id];
+
+      runtimePlayer.lifecycle.phase = isAlive ? "playing" : "gameOver";
+      runtimePlayer.lifecycle.deathReason = isAlive ? null : "unknown";
+
+      if (head !== null) {
+        runtimePlayer.snake = moveLegacySnakeToHead(runtimePlayer.snake, head);
+      }
+
+      this.rebuildOnlinePvpSnakeOccupancy(runtimePlayer, runtime.grid);
+    }
+
+    this.discardExpiredOnlineInputs(message);
+  }
+
   private discardConfirmedOnlineInputs(message: ServerSnapshotMessage): void {
+    if (!hasFullPvpSnapshot(message)) {
+      this.discardExpiredOnlineInputs(message);
+      return;
+    }
+
     const confirmedSeqByPlayer = new Map<PlayerId, number>();
 
     for (const player of message.players) {
@@ -1053,6 +1115,23 @@ export class Game {
         this.inputState.lastAppliedSequenceByPlayer[playerId] ?? 0,
         confirmedSequence,
       );
+      this.inputState.lastProcessedTickByPlayer[playerId] = Math.max(
+        this.inputState.lastProcessedTickByPlayer[playerId] ?? -1,
+        message.tick,
+      );
+    }
+  }
+
+  private discardExpiredOnlineInputs(message: ServerSnapshotMessage): void {
+    const session = this.onlineSession;
+
+    if (session === null) {
+      return;
+    }
+
+    this.inputState.queue = this.inputState.queue.filter((command) => command.tick + session.inputDelayTicks >= message.tick);
+
+    for (const playerId of ["p1", "p2"] as const) {
       this.inputState.lastProcessedTickByPlayer[playerId] = Math.max(
         this.inputState.lastProcessedTickByPlayer[playerId] ?? -1,
         message.tick,
@@ -1696,7 +1775,7 @@ export class Game {
     session.latestSnapshot = message;
     session.lastSnapshotHash = message.stateHash;
     session.lastSnapshotTick = message.tick;
-    session.syncNotice = null;
+    session.syncNotice = hasFullPvpSnapshot(message) ? null : LEGACY_PVP_SNAPSHOT_NOTICE;
     this.applyOnlinePvpSnapshotCorrection(message);
 
     this.syncOnlinePvpRuntimeState();
