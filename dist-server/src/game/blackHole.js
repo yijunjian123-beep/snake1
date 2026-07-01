@@ -1,0 +1,542 @@
+import { findStage0SafeSpawnPosition } from "./spawn.js";
+import { OPPOSITE_DIRECTIONS, PERPENDICULAR_PAIRS } from "./direction.js";
+import { cellKey, chebyshevDistance, isCellInsideZone, isInsideGrid } from "./gridMath.js";
+const NEIGHBOR_DELTAS = [
+    { column: 0, row: -1 },
+    { column: 1, row: 0 },
+    { column: 0, row: 1 },
+    { column: -1, row: 0 },
+];
+const DIRECTION_VECTORS = {
+    up: { x: 0, y: -1 },
+    right: { x: 1, y: 0 },
+    down: { x: 0, y: 1 },
+    left: { x: -1, y: 0 },
+};
+const KIND_PRIORITY = {
+    small: 0,
+    medium: 1,
+    large: 2,
+};
+const BAND_PRIORITY = {
+    core: 4,
+    strong: 3,
+    medium: 2,
+    weak: 1,
+};
+export const BLACK_HOLE_CONFIG = {
+    unlockLength: 7,
+    maxCount: 4,
+    midScoreThreshold: 80,
+    midLengthThreshold: 12,
+    lateScoreThreshold: 160,
+    lateLengthThreshold: 18,
+    variants: {
+        small: {
+            bodyRadiusCells: 0,
+            influenceRadiusCells: 3,
+            foodAvoidRadiusCells: 1,
+            safeSpawnDistance: 5,
+            wallPadding: 1,
+            activationDelayMs: 420,
+            pulseSpeed: 1.65,
+            bandThresholds: {
+                strong: 1,
+            },
+            chargeThresholds: {
+                strong: 1,
+                weak: 2,
+            },
+        },
+        medium: {
+            bodyRadiusCells: 0,
+            influenceRadiusCells: 6,
+            foodAvoidRadiusCells: 2,
+            safeSpawnDistance: 8,
+            wallPadding: 2,
+            activationDelayMs: 660,
+            pulseSpeed: 1.25,
+            bandThresholds: {
+                strong: 2,
+                medium: 4,
+            },
+            chargeThresholds: {
+                strong: 1,
+                medium: 2,
+                weak: 3,
+            },
+        },
+        large: {
+            bodyRadiusCells: 0,
+            influenceRadiusCells: 8,
+            foodAvoidRadiusCells: 3,
+            safeSpawnDistance: 10,
+            wallPadding: 3,
+            activationDelayMs: 900,
+            pulseSpeed: 0.95,
+            bandThresholds: {
+                strong: 2,
+                medium: 5,
+            },
+            chargeThresholds: {
+                strong: 1,
+                medium: 2,
+                weak: 3,
+            },
+        },
+    },
+};
+export function getDesiredBlackHoleCount(progress, config = BLACK_HOLE_CONFIG) {
+    if (progress.snakeLength < config.unlockLength) {
+        return 0;
+    }
+    if (progress.score >= config.lateScoreThreshold || progress.snakeLength >= config.lateLengthThreshold) {
+        return config.maxCount;
+    }
+    if (progress.score >= config.midScoreThreshold || progress.snakeLength >= config.midLengthThreshold) {
+        return Math.min(config.maxCount, 2);
+    }
+    return Math.min(config.maxCount, 1);
+}
+export function getBlackHoleKindForSpawn(progress, grid) {
+    if (grid.columns < 18 || grid.rows < 14) {
+        return "small";
+    }
+    if (progress.score >= BLACK_HOLE_CONFIG.lateScoreThreshold || progress.snakeLength >= BLACK_HOLE_CONFIG.lateLengthThreshold) {
+        return "large";
+    }
+    if (progress.score >= BLACK_HOLE_CONFIG.midScoreThreshold || progress.snakeLength >= BLACK_HOLE_CONFIG.midLengthThreshold) {
+        return "medium";
+    }
+    return "small";
+}
+export function chooseBlackHoleSpawnKind(existingKinds, desiredCount, random = Math.random) {
+    const hasSmall = existingKinds.includes("small");
+    const hasMedium = existingKinds.includes("medium");
+    const hasLarge = existingKinds.includes("large");
+    if (desiredCount <= 1) {
+        return "small";
+    }
+    if (desiredCount === 2) {
+        if (!hasSmall) {
+            return "small";
+        }
+        if (!hasMedium) {
+            return "medium";
+        }
+        return random() < 0.5 ? "small" : "medium";
+    }
+    if (desiredCount === 3) {
+        if (!hasSmall) {
+            return "small";
+        }
+        if (!hasMedium) {
+            return "medium";
+        }
+        if (!hasLarge) {
+            return "large";
+        }
+        return random() < 0.5 ? "small" : "medium";
+    }
+    if (!hasSmall) {
+        return "small";
+    }
+    if (!hasLarge) {
+        return "large";
+    }
+    return random() < 0.5 ? "small" : "medium";
+}
+export function getBlackHoleVariant(kind) {
+    return BLACK_HOLE_CONFIG.variants[kind];
+}
+export function getBlackHoleKey(blackHole) {
+    return `${blackHole.spawnTime}:${blackHole.cell.column}:${blackHole.cell.row}`;
+}
+export function isBlackHoleActive(blackHole, currentTime) {
+    return currentTime >= blackHole.activateAt;
+}
+export function getBlackHoleFormationProgress(blackHole, currentTime) {
+    const duration = Math.max(0.001, blackHole.activateAt - blackHole.spawnTime);
+    return clamp((currentTime - blackHole.spawnTime) / duration, 0, 1);
+}
+export function getBlackHoleCoreRadiusCells(blackHole) {
+    return getBlackHoleVariant(blackHole.kind).bodyRadiusCells;
+}
+export function getBlackHoleInfluenceRadiusCells(blackHole) {
+    return getBlackHoleVariant(blackHole.kind).influenceRadiusCells;
+}
+export function getBlackHolePulseSpeed(blackHole) {
+    return getBlackHoleVariant(blackHole.kind).pulseSpeed;
+}
+export function getBlackHoleAlertRadiusCells(blackHole) {
+    return getBlackHoleInfluenceRadiusCells(blackHole) + 1;
+}
+export function getBlackHoleSpawnExclusionRadiusCells(blackHole) {
+    return getBlackHoleAlertRadiusCells(blackHole);
+}
+export function getBlackHoleFoodAvoidRadiusCells(blackHole) {
+    return getBlackHoleVariant(blackHole.kind).foodAvoidRadiusCells;
+}
+export function getBlackHoleChargeThreshold(blackHole, band) {
+    const thresholds = getBlackHoleVariant(blackHole.kind).chargeThresholds;
+    switch (band) {
+        case "strong":
+            return thresholds.strong;
+        case "medium":
+            return thresholds.medium ?? thresholds.weak;
+        case "weak":
+            return thresholds.weak;
+    }
+}
+export function spawnBlackHole(context, config = BLACK_HOLE_CONFIG) {
+    const random = context.random ?? Math.random;
+    const kind = context.kind ?? getBlackHoleKindForSpawn(context.progress, context.grid);
+    const variant = getBlackHoleVariant(kind);
+    const currentHead = context.snake[0] ?? context.birthCell;
+    const baseOccupiedCells = [
+        ...context.snake.slice(1),
+        ...context.foods,
+        ...context.existingBlackHoles.map((blackHole) => blackHole.cell),
+        ...(context.futureBlockedCells ?? []),
+    ];
+    const dangerZones = [
+        { center: context.birthCell, radius: variant.safeSpawnDistance },
+        { center: currentHead, radius: variant.safeSpawnDistance },
+        ...context.existingBlackHoles.map((blackHole) => ({ center: blackHole.cell, radius: getBlackHoleSpawnExclusionRadiusCells(blackHole) })),
+        ...(context.futureDangerZones ?? []),
+    ];
+    const rejectedCells = [];
+    for (let attempt = 0; attempt < config.maxCount * 64; attempt += 1) {
+        const candidate = findStage0SafeSpawnPosition(context.grid, {
+            occupiedCells: [...baseOccupiedCells, ...rejectedCells],
+            snakeHead: currentHead,
+            snakeHeadRadius: variant.safeSpawnDistance,
+            wallPadding: variant.wallPadding,
+            dangerZones,
+            maxAttempts: 128,
+            random,
+        });
+        if (!candidate) {
+            return null;
+        }
+        if (!isBlackHoleCandidateSafe(candidate, context.grid, context.snake, context.foods, dangerZones, variant)) {
+            rejectedCells.push(candidate);
+            continue;
+        }
+        return {
+            kind,
+            cell: { ...candidate },
+            seed: Math.floor(random() * 1_000_000),
+            spawnTime: context.currentTime,
+            activateAt: context.currentTime + variant.activationDelayMs / 1000,
+        };
+    }
+    return null;
+}
+export function isBlackHoleCollision(cell, blackHole, currentTime) {
+    if (!isBlackHoleActive(blackHole, currentTime)) {
+        return false;
+    }
+    return getBlackHoleBandForCell(cell, blackHole, currentTime) === "core";
+}
+export function getBlackHoleBandForCell(cell, blackHole, currentTime) {
+    if (!isBlackHoleActive(blackHole, currentTime)) {
+        return null;
+    }
+    const distance = chebyshevDistance(cell, blackHole.cell);
+    const variant = getBlackHoleVariant(blackHole.kind);
+    const bandThresholds = variant.bandThresholds;
+    if (distance <= variant.bodyRadiusCells) {
+        return "core";
+    }
+    if (distance > variant.influenceRadiusCells) {
+        return null;
+    }
+    if (blackHole.kind === "small") {
+        return distance <= bandThresholds.strong ? "strong" : "weak";
+    }
+    if (distance <= bandThresholds.strong) {
+        return "strong";
+    }
+    if (bandThresholds.medium !== undefined && distance <= bandThresholds.medium) {
+        return "medium";
+    }
+    return "weak";
+}
+export function resolveBlackHoleAlert(head, blackHoles, currentTime) {
+    const dominant = chooseDominantAlert(head, blackHoles, currentTime);
+    if (!dominant) {
+        return null;
+    }
+    return {
+        blackHole: dominant.blackHole,
+        distance: dominant.distance,
+    };
+}
+export function resolveBlackHoleMovement(head, intendedDirection, previousDirection, blackHoles, currentTime, previousState) {
+    const dominant = chooseDominantInfluence(head, blackHoles, currentTime);
+    if (!dominant) {
+        return {
+            finalDirection: intendedDirection,
+            shouldDie: false,
+            shouldPlayWarning: false,
+            shouldPlayPull: false,
+            shouldPlayFail: false,
+            nextGravityState: { key: null, charge: 0 },
+            activeBlackHole: null,
+            cue: null,
+        };
+    }
+    if (dominant.band === "core") {
+        return {
+            finalDirection: intendedDirection,
+            shouldDie: true,
+            shouldPlayWarning: false,
+            shouldPlayPull: false,
+            shouldPlayFail: false,
+            nextGravityState: { key: null, charge: 0 },
+            activeBlackHole: dominant.blackHole,
+            cue: null,
+        };
+    }
+    const isFirstTick = previousState.key !== dominant.key;
+    const orientation = getBlackHoleOrientation(head, intendedDirection, dominant.blackHole);
+    const pullDirection = orientation.isSideways ? choosePullDirection(head, intendedDirection, dominant.blackHole) : null;
+    const chargeThreshold = getBlackHoleChargeThreshold(dominant.blackHole, dominant.band);
+    let charge = isFirstTick ? 0 : previousState.charge;
+    let finalDirection = intendedDirection;
+    let shouldPlayWarning = false;
+    let shouldPlayPull = false;
+    let shouldPlayFail = false;
+    if (isFirstTick) {
+        shouldPlayWarning = true;
+    }
+    else if (orientation.isEscaping) {
+        charge = 0;
+    }
+    else if (orientation.isAhead) {
+        // Keep the current charge. Moving directly toward the hole should feel dangerous
+        // but should not trigger the sideways pull.
+    }
+    else {
+        charge += 1;
+        if (charge >= chargeThreshold && pullDirection) {
+            if (pullDirection === OPPOSITE_DIRECTIONS[previousDirection]) {
+                shouldPlayFail = true;
+            }
+            else {
+                finalDirection = pullDirection;
+                shouldPlayPull = true;
+                charge = 0;
+            }
+        }
+        else {
+            shouldPlayWarning = true;
+        }
+    }
+    const cue = {
+        blackHole: dominant.blackHole,
+        band: dominant.band,
+        distance: dominant.distance,
+        charge,
+        chargeThreshold,
+        pullDirection,
+        isFirstTick,
+        isPulling: shouldPlayPull,
+        isEscaping: orientation.isEscaping,
+    };
+    return {
+        finalDirection,
+        shouldDie: false,
+        shouldPlayWarning,
+        shouldPlayPull,
+        shouldPlayFail,
+        nextGravityState: {
+            key: dominant.key,
+            charge,
+        },
+        activeBlackHole: dominant.blackHole,
+        cue,
+    };
+}
+function chooseDominantInfluence(head, blackHoles, currentTime) {
+    const candidates = [];
+    for (const blackHole of blackHoles) {
+        const band = getBlackHoleBandForCell(head, blackHole, currentTime);
+        if (!band) {
+            continue;
+        }
+        const distance = chebyshevDistance(head, blackHole.cell);
+        candidates.push({
+            blackHole,
+            key: getBlackHoleKey(blackHole),
+            band,
+            distance,
+            priority: getBandPriority(band) * 100 + getKindPriority(blackHole.kind) * 10 - distance,
+        });
+    }
+    if (candidates.length === 0) {
+        return null;
+    }
+    candidates.sort((left, right) => {
+        if (left.distance !== right.distance) {
+            return left.distance - right.distance;
+        }
+        const bandDelta = getBandPriority(right.band) - getBandPriority(left.band);
+        if (bandDelta !== 0) {
+            return bandDelta;
+        }
+        const kindDelta = getKindPriority(right.blackHole.kind) - getKindPriority(left.blackHole.kind);
+        if (kindDelta !== 0) {
+            return kindDelta;
+        }
+        return left.blackHole.spawnTime - right.blackHole.spawnTime;
+    });
+    return candidates[0] ?? null;
+}
+function chooseDominantAlert(head, blackHoles, currentTime) {
+    const candidates = [];
+    for (const blackHole of blackHoles) {
+        if (!isBlackHoleActive(blackHole, currentTime)) {
+            continue;
+        }
+        const influenceRadius = getBlackHoleInfluenceRadiusCells(blackHole);
+        const alertRadius = getBlackHoleAlertRadiusCells(blackHole);
+        const distance = chebyshevDistance(head, blackHole.cell);
+        if (distance <= influenceRadius || distance > alertRadius) {
+            continue;
+        }
+        candidates.push({
+            blackHole,
+            distance,
+        });
+    }
+    if (candidates.length === 0) {
+        return null;
+    }
+    candidates.sort((left, right) => {
+        if (left.distance !== right.distance) {
+            return left.distance - right.distance;
+        }
+        const kindDelta = getKindPriority(right.blackHole.kind) - getKindPriority(left.blackHole.kind);
+        if (kindDelta !== 0) {
+            return kindDelta;
+        }
+        return left.blackHole.spawnTime - right.blackHole.spawnTime;
+    });
+    return candidates[0] ?? null;
+}
+function getBlackHoleOrientation(head, intendedDirection, blackHole) {
+    const toHole = {
+        x: blackHole.cell.column - head.column,
+        y: blackHole.cell.row - head.row,
+    };
+    const direction = DIRECTION_VECTORS[intendedDirection];
+    const [sideDirection] = PERPENDICULAR_PAIRS[intendedDirection];
+    const sideVector = DIRECTION_VECTORS[sideDirection];
+    const forward = toHole.x * direction.x + toHole.y * direction.y;
+    const side = toHole.x * sideVector.x + toHole.y * sideVector.y;
+    const absSide = Math.abs(side);
+    return {
+        forward,
+        side,
+        isAhead: forward >= absSide,
+        isEscaping: -forward >= absSide,
+        isSideways: forward < absSide && -forward < absSide,
+    };
+}
+function choosePullDirection(head, intendedDirection, blackHole) {
+    const toHole = {
+        x: blackHole.cell.column - head.column,
+        y: blackHole.cell.row - head.row,
+    };
+    const [leftDirection, rightDirection] = PERPENDICULAR_PAIRS[intendedDirection];
+    const candidates = [
+        {
+            direction: leftDirection,
+            score: dot(DIRECTION_VECTORS[leftDirection], toHole),
+        },
+        {
+            direction: rightDirection,
+            score: dot(DIRECTION_VECTORS[rightDirection], toHole),
+        },
+    ];
+    candidates.sort((left, right) => right.score - left.score);
+    const best = candidates[0];
+    if (!best || best.score <= 0) {
+        return null;
+    }
+    return best.direction;
+}
+function isBlackHoleCandidateSafe(candidate, grid, snake, foods, dangerZones, variant) {
+    if (isWallUnsafe(candidate, grid, variant.wallPadding)) {
+        return false;
+    }
+    if (dangerZones.some((zone) => isCellInsideZone(candidate, zone))) {
+        return false;
+    }
+    const blockedCells = buildBlockedSet([...snake.slice(1), candidate]);
+    for (const zone of dangerZones) {
+        blockedCells.add(cellKey(zone.center));
+    }
+    return hasPathToAnyFood(grid, snake[0] ?? candidate, foods, blockedCells);
+}
+function hasPathToAnyFood(grid, start, foods, blockedCells) {
+    if (foods.length === 0) {
+        return true;
+    }
+    const targetCells = new Set(foods.map((food) => cellKey(food)));
+    const visited = new Set();
+    const queue = [{ ...start }];
+    visited.add(cellKey(start));
+    while (queue.length > 0) {
+        const current = queue.shift();
+        if (!current) {
+            continue;
+        }
+        if (targetCells.has(cellKey(current))) {
+            return true;
+        }
+        for (const delta of NEIGHBOR_DELTAS) {
+            const next = {
+                column: current.column + delta.column,
+                row: current.row + delta.row,
+            };
+            const key = cellKey(next);
+            if (visited.has(key) || blockedCells.has(key) || !isInsideGrid(next, grid)) {
+                continue;
+            }
+            visited.add(key);
+            queue.push(next);
+        }
+    }
+    return false;
+}
+function buildBlockedSet(cells) {
+    const blocked = new Set();
+    for (const cell of cells) {
+        blocked.add(cellKey(cell));
+    }
+    return blocked;
+}
+function isWallUnsafe(cell, grid, padding) {
+    if (padding <= 0) {
+        return false;
+    }
+    return (cell.row < padding ||
+        cell.column < padding ||
+        cell.row >= grid.rows - padding ||
+        cell.column >= grid.columns - padding);
+}
+function getBandPriority(band) {
+    return BAND_PRIORITY[band];
+}
+function getKindPriority(kind) {
+    return KIND_PRIORITY[kind];
+}
+function dot(vector, target) {
+    return vector.x * target.x + vector.y * target.y;
+}
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}

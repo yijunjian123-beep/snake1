@@ -1,8 +1,15 @@
 import { randomUUID } from "node:crypto";
 export class ConnectionRegistry {
-    #connections = new Map();
+    #connectionsByPlayerId = new Map();
+    #connectionsBySessionToken = new Map();
     get size() {
-        return this.#connections.size;
+        let activeCount = 0;
+        for (const connection of this.#connectionsByPlayerId.values()) {
+            if (connection.socket !== null) {
+                activeCount += 1;
+            }
+        }
+        return activeCount;
     }
     add(socket, now = Date.now()) {
         const connection = {
@@ -11,24 +18,100 @@ export class ConnectionRegistry {
             socket,
             connectedAt: now,
             lastSeenAt: now,
+            disconnectedAt: null,
+            messageWindowStartedAt: now,
+            messageCountInWindow: 0,
+            status: "idle",
+            roomId: null,
         };
-        this.#connections.set(connection.playerId, connection);
+        this.#connectionsByPlayerId.set(connection.playerId, connection);
+        this.#connectionsBySessionToken.set(connection.sessionToken, connection);
         return connection;
     }
-    remove(playerId) {
-        this.#connections.delete(playerId);
+    isCurrent(connection) {
+        return this.#connectionsByPlayerId.get(connection.playerId) === connection;
     }
-    touch(playerId, now = Date.now()) {
-        const connection = this.#connections.get(playerId);
-        if (connection !== undefined) {
-            connection.lastSeenAt = now;
+    remove(connection) {
+        if (!this.isCurrent(connection)) {
+            return undefined;
         }
+        this.#connectionsByPlayerId.delete(connection.playerId);
+        this.#connectionsBySessionToken.delete(connection.sessionToken);
+        return connection;
+    }
+    touch(connection, now = Date.now()) {
+        if (!this.isCurrent(connection)) {
+            return;
+        }
+        connection.lastSeenAt = now;
+    }
+    disconnect(connection, now = Date.now()) {
+        if (!this.isCurrent(connection)) {
+            return false;
+        }
+        connection.socket = null;
+        connection.lastSeenAt = now;
+        connection.disconnectedAt = now;
+        return true;
+    }
+    restoreSocket(connection, sessionToken, now = Date.now()) {
+        const restored = this.#connectionsBySessionToken.get(sessionToken);
+        if (restored === undefined || restored === connection) {
+            return undefined;
+        }
+        if (!this.isCurrent(connection)) {
+            return undefined;
+        }
+        const { socket: restoredSocket, ...restoredState } = restored;
+        this.#connectionsByPlayerId.delete(connection.playerId);
+        this.#connectionsBySessionToken.delete(connection.sessionToken);
+        this.#connectionsByPlayerId.delete(restored.playerId);
+        this.#connectionsBySessionToken.delete(restored.sessionToken);
+        connection.playerId = restoredState.playerId;
+        connection.sessionToken = restoredState.sessionToken;
+        connection.connectedAt = restoredState.connectedAt;
+        connection.lastSeenAt = now;
+        connection.disconnectedAt = null;
+        connection.messageWindowStartedAt = now;
+        connection.messageCountInWindow = 0;
+        connection.nickname = restoredState.nickname;
+        connection.status = restoredState.status;
+        connection.roomId = restoredState.roomId;
+        connection.roomCode = restoredState.roomCode;
+        connection.playerSlot = restoredState.playerSlot;
+        connection.queueJoinedAt = restoredState.queueJoinedAt;
+        this.#connectionsByPlayerId.set(connection.playerId, connection);
+        this.#connectionsBySessionToken.set(connection.sessionToken, connection);
+        if (restoredSocket !== null && restoredSocket !== connection.socket) {
+            restoredSocket.close(1000, "reconnected");
+        }
+        return connection;
     }
     getExpired(now, timeoutMs) {
-        return [...this.#connections.values()].filter((connection) => now - connection.lastSeenAt > timeoutMs);
+        return [...this.#connectionsByPlayerId.values()].filter((connection) => connection.socket === null && connection.disconnectedAt !== null && now - connection.disconnectedAt > timeoutMs);
+    }
+    takeMessageCredit(connection, maxMessages, windowMs, now = Date.now()) {
+        if (!this.isCurrent(connection) || connection.socket === null) {
+            return false;
+        }
+        if (now - connection.messageWindowStartedAt >= windowMs) {
+            connection.messageWindowStartedAt = now;
+            connection.messageCountInWindow = 0;
+        }
+        connection.messageCountInWindow += 1;
+        return connection.messageCountInWindow <= maxMessages;
+    }
+    get(playerId) {
+        return this.#connectionsByPlayerId.get(playerId);
+    }
+    getBySessionToken(sessionToken) {
+        return this.#connectionsBySessionToken.get(sessionToken);
+    }
+    activeValues() {
+        return [...this.#connectionsByPlayerId.values()].filter((connection) => connection.socket !== null);
     }
     values() {
-        return [...this.#connections.values()];
+        return [...this.#connectionsByPlayerId.values()];
     }
 }
 function createPlayerId() {

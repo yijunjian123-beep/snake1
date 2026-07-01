@@ -4,9 +4,9 @@ export declare const PLAYER_SLOTS: readonly ["p1", "p2"];
 export type PlayerSlot = (typeof PLAYER_SLOTS)[number];
 export declare const ROOM_PHASES: readonly ["waiting", "ready", "countdown", "playing", "finished"];
 export type RoomPhase = (typeof ROOM_PHASES)[number];
-export declare const ERROR_CODES: readonly ["invalid_message", "unsupported_version", "invalid_session", "room_not_found", "room_full", "not_in_room", "already_in_room", "queue_full", "capacity_reached", "invalid_state", "rate_limited", "server_busy", "server_shutdown", "internal_error"];
+export declare const ERROR_CODES: readonly ["invalid_message", "unsupported_version", "invalid_session", "room_not_found", "room_full", "room_capacity_reached", "not_in_room", "already_in_room", "queue_full", "capacity_reached", "invalid_state", "service_busy", "rate_limited", "server_busy", "server_shutdown", "internal_error"];
 export type ErrorCode = (typeof ERROR_CODES)[number];
-export declare const GAME_OVER_REASONS: readonly ["wall", "snake_body", "head_to_head", "black_hole", "star_beast", "forfeit", "opponent_left", "desync", "timeout", "server_shutdown", "draw", "unknown"];
+export declare const GAME_OVER_REASONS: readonly ["wall", "snake_body", "head_to_head", "black_hole", "star_beast", "forfeit", "opponent_left", "opponent_disconnected", "desync", "timeout", "server_shutdown", "draw", "unknown"];
 export type GameOverReason = (typeof GAME_OVER_REASONS)[number];
 export type PvpTick = number;
 export type PvpInputSeq = number;
@@ -51,6 +51,16 @@ export interface PvpRoomPlayer {
 export interface PvpGridCell {
     readonly column: number;
     readonly row: number;
+}
+export interface PvpPlayerSnapshot {
+    readonly playerSlot: PlayerSlot;
+    readonly snake: readonly PvpGridCell[];
+    readonly direction: Direction;
+    readonly score: number;
+    readonly coresEaten: number;
+    readonly alive: boolean;
+    readonly deathReason: GameOverReason | null;
+    readonly lastProcessedSeq: PvpInputSeq;
 }
 export type PvpSnakeHeads = Readonly<Record<PlayerSlot, PvpGridCell | null>>;
 export type PvpAliveMap = Readonly<Record<PlayerSlot, boolean>>;
@@ -126,6 +136,7 @@ export interface ServerQueueStateMessage {
     readonly type: "queueState";
     readonly position?: number;
     readonly waitingMs: number;
+    readonly estimatedWaitMs?: number;
     readonly onlineCount: number;
     readonly queuedCount: number;
 }
@@ -155,11 +166,18 @@ export interface ServerPeerInputMessage {
 }
 export interface ServerSnapshotMessage {
     readonly type: "snapshot";
+    readonly phase: RoomPhase;
     readonly tick: PvpTick;
     readonly stateHash: PvpStateHash;
     readonly snakeHeads: PvpSnakeHeads;
     readonly alive: PvpAliveMap;
+    readonly foods?: readonly PvpGridCell[];
+    readonly players?: readonly PvpPlayerSnapshot[];
 }
+export type ServerFullSnapshotMessage = ServerSnapshotMessage & {
+    readonly foods: readonly PvpGridCell[];
+    readonly players: readonly PvpPlayerSnapshot[];
+};
 export interface ServerGameOverMessage {
     readonly type: "gameOver";
     readonly winner: PvpWinner;

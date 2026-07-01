@@ -1,0 +1,274 @@
+import { getBlackHoleFoodAvoidRadiusCells } from "./blackHole.js";
+import { cellKey, chebyshevDistance } from "./gridMath.js";
+import { DEFAULT_SAFE_SPAWN_CONFIG } from "./progression.js";
+import { findSafeSpawnPosition } from "./spawn.js";
+export const FOOD_SPAWN_CONFIG = {
+    normalCap: 10,
+    waveIntervalMs: 5000,
+    waveBagSingleCount: 17,
+    waveBagClusterCount: 3,
+    clusterMinCount: 3,
+    clusterMaxCount: 5,
+    clusterRadius: 2,
+};
+export function createFoodSpawnContext(input) {
+    return {
+        grid: input.grid,
+        occupiedCells: [
+            ...input.snake,
+            ...input.foods,
+            ...(input.starAttractorCells ?? []),
+            ...(input.starBeastCells ?? []),
+            ...(input.starCoreCells ?? []),
+            ...input.blackHoles.map((blackHole) => blackHole.cell),
+            ...(input.extraBlockedCells ?? []),
+        ],
+        blackHoles: input.blackHoles,
+    };
+}
+export function createFoodWaveSpawnConfig(overrides = {}) {
+    return {
+        normalCap: overrides.normalCap ?? FOOD_SPAWN_CONFIG.normalCap,
+        waveBagSingleCount: overrides.waveBagSingleCount ?? FOOD_SPAWN_CONFIG.waveBagSingleCount,
+        waveBagClusterCount: overrides.waveBagClusterCount ?? FOOD_SPAWN_CONFIG.waveBagClusterCount,
+        clusterMinCount: overrides.clusterMinCount ?? FOOD_SPAWN_CONFIG.clusterMinCount,
+        clusterMaxCount: overrides.clusterMaxCount ?? FOOD_SPAWN_CONFIG.clusterMaxCount,
+        clusterRadius: overrides.clusterRadius ?? FOOD_SPAWN_CONFIG.clusterRadius,
+    };
+}
+export function createFoodWaveBag(random = Math.random) {
+    const bag = [
+        ...Array.from({ length: FOOD_SPAWN_CONFIG.waveBagSingleCount }, () => "single"),
+        ...Array.from({ length: FOOD_SPAWN_CONFIG.waveBagClusterCount }, () => "cluster"),
+    ];
+    return shuffleArray(bag, random);
+}
+export function spawnFoodCell(context, random = Math.random) {
+    return findSafeSpawnPosition(context.grid, {
+        ...DEFAULT_SAFE_SPAWN_CONFIG,
+        wallPadding: 0,
+        snakeHeadRadius: 0,
+        occupiedCells: context.occupiedCells,
+        dangerZones: context.blackHoles.map((blackHole) => ({
+            center: blackHole.cell,
+            radius: getBlackHoleFoodAvoidRadiusCells(blackHole),
+        })),
+        random,
+    });
+}
+export function spawnFoodWave(input) {
+    if (input.currentFoodCount >= input.config.normalCap) {
+        return {
+            spawnedFoods: [],
+            nextFoodWaveBag: [...input.foodWaveBag],
+        };
+    }
+    const random = input.random ?? Math.random;
+    const preparedBag = input.foodWaveBag.length > 0
+        ? [...input.foodWaveBag]
+        : createFoodWaveBag(random);
+    const waveKind = preparedBag[preparedBag.length - 1] ?? "single";
+    if (waveKind === "single") {
+        const singleFood = spawnFoodCell(input.context, random);
+        if (!singleFood) {
+            return {
+                spawnedFoods: [],
+                nextFoodWaveBag: preparedBag,
+            };
+        }
+        preparedBag.pop();
+        return {
+            spawnedFoods: [singleFood],
+            nextFoodWaveBag: preparedBag,
+        };
+    }
+    const availableSlots = input.config.normalCap - input.currentFoodCount;
+    const targetCount = Math.min(availableSlots, input.config.clusterMinCount
+        + Math.floor(random() * (input.config.clusterMaxCount - input.config.clusterMinCount + 1)));
+    const clusterFoods = spawnClusterFoods(input.context, targetCount, input.config.clusterRadius, random);
+    if (clusterFoods.length > 0) {
+        preparedBag.pop();
+        return {
+            spawnedFoods: clusterFoods,
+            nextFoodWaveBag: preparedBag,
+        };
+    }
+    const fallbackFood = spawnFoodCell(input.context, random);
+    if (!fallbackFood) {
+        return {
+            spawnedFoods: [],
+            nextFoodWaveBag: preparedBag,
+        };
+    }
+    preparedBag.pop();
+    return {
+        spawnedFoods: [fallbackFood],
+        nextFoodWaveBag: preparedBag,
+    };
+}
+export function advanceFoodWaveRuntime(input) {
+    let nextSpawnAtMs = input.nextSpawnAtMs;
+    let currentFoodCount = input.currentFoodCount;
+    let nextFoodWaveBag = [...input.foodWaveBag];
+    const spawnedFoods = [];
+    const random = input.random ?? Math.random;
+    while (input.currentTimeMs >= nextSpawnAtMs) {
+        if (currentFoodCount < input.config.normalCap) {
+            const result = spawnFoodWave({
+                context: input.context,
+                currentFoodCount,
+                foodWaveBag: nextFoodWaveBag,
+                config: input.config,
+                random,
+            });
+            nextFoodWaveBag = result.nextFoodWaveBag;
+            if (result.spawnedFoods.length > 0) {
+                spawnedFoods.push(...result.spawnedFoods);
+                currentFoodCount += result.spawnedFoods.length;
+            }
+        }
+        nextSpawnAtMs += FOOD_SPAWN_CONFIG.waveIntervalMs;
+    }
+    return {
+        spawnedFoods,
+        nextFoodWaveBag,
+        nextSpawnAtMs,
+    };
+}
+export function getFoodSpawnCandidates(context) {
+    const occupied = new Set(context.occupiedCells.map((cell) => cellKey(cell)));
+    const candidates = [];
+    for (let row = 0; row < context.grid.rows; row += 1) {
+        for (let column = 0; column < context.grid.columns; column += 1) {
+            const cell = { column, row };
+            if (occupied.has(cellKey(cell))) {
+                continue;
+            }
+            if (isBlockedByBlackHoleFoodZone(cell, context.blackHoles)) {
+                continue;
+            }
+            candidates.push(cell);
+        }
+    }
+    return candidates;
+}
+export function spawnClusterFoods(context, maxCount, clusterRadius, random = Math.random) {
+    if (maxCount <= 0) {
+        return [];
+    }
+    const candidates = getFoodSpawnCandidates(context);
+    if (candidates.length === 0) {
+        return [];
+    }
+    const candidateKeys = new Set(candidates.map((cell) => cellKey(cell)));
+    const weightedAnchors = candidates
+        .map((cell) => ({
+        cell,
+        weight: getFoodClusterAnchorWeight(cell, candidateKeys, context.blackHoles, context.grid, clusterRadius),
+    }))
+        .filter((candidate) => candidate.weight > 0);
+    const anchor = pickWeightedGridCell(weightedAnchors, random);
+    if (!anchor) {
+        return [];
+    }
+    return getClusterFoodsAroundAnchor(anchor, candidateKeys, context.grid, clusterRadius).slice(0, maxCount);
+}
+export function isBlockedByBlackHoleFoodZone(cell, blackHoles) {
+    return blackHoles.some((blackHole) => chebyshevDistance(cell, blackHole.cell) <= getBlackHoleFoodAvoidRadiusCells(blackHole));
+}
+function getFoodClusterAnchorWeight(cell, candidateKeys, blackHoles, grid, clusterRadius) {
+    const capacity = getFoodClusterCapacity(cell, candidateKeys, grid, clusterRadius);
+    let proximityBonus = 1;
+    for (const blackHole of blackHoles) {
+        const forbiddenRadius = getBlackHoleFoodAvoidRadiusCells(blackHole);
+        const distance = chebyshevDistance(cell, blackHole.cell);
+        if (distance <= forbiddenRadius) {
+            continue;
+        }
+        const gap = distance - forbiddenRadius;
+        if (gap <= 1) {
+            proximityBonus = Math.max(proximityBonus, 9);
+        }
+        else if (gap === 2) {
+            proximityBonus = Math.max(proximityBonus, 6);
+        }
+        else if (gap === 3) {
+            proximityBonus = Math.max(proximityBonus, 4);
+        }
+        else if (gap === 4) {
+            proximityBonus = Math.max(proximityBonus, 2);
+        }
+    }
+    return Math.max(1, capacity) * proximityBonus;
+}
+function getFoodClusterCapacity(center, candidateKeys, grid, clusterRadius) {
+    let capacity = 0;
+    for (let row = center.row - clusterRadius; row <= center.row + clusterRadius; row += 1) {
+        for (let column = center.column - clusterRadius; column <= center.column + clusterRadius; column += 1) {
+            if (column < 0 || row < 0 || column >= grid.columns || row >= grid.rows) {
+                continue;
+            }
+            const cell = { column, row };
+            if (!candidateKeys.has(cellKey(cell))) {
+                continue;
+            }
+            capacity += 1;
+        }
+    }
+    return capacity;
+}
+function getClusterFoodsAroundAnchor(anchor, candidateKeys, grid, clusterRadius) {
+    const scored = [];
+    for (let row = anchor.row - clusterRadius; row <= anchor.row + clusterRadius; row += 1) {
+        for (let column = anchor.column - clusterRadius; column <= anchor.column + clusterRadius; column += 1) {
+            if (column < 0 || row < 0 || column >= grid.columns || row >= grid.rows) {
+                continue;
+            }
+            const cell = { column, row };
+            if (!candidateKeys.has(cellKey(cell))) {
+                continue;
+            }
+            const dx = Math.abs(column - anchor.column);
+            const dy = Math.abs(row - anchor.row);
+            scored.push({
+                cell,
+                distance: Math.max(dx, dy),
+                manhattan: dx + dy,
+            });
+        }
+    }
+    scored.sort((left, right) => (left.distance - right.distance ||
+        left.manhattan - right.manhattan ||
+        left.cell.row - right.cell.row ||
+        left.cell.column - right.cell.column));
+    return scored.map((entry) => entry.cell);
+}
+function shuffleArray(items, random) {
+    for (let index = items.length - 1; index > 0; index -= 1) {
+        const swapIndex = Math.floor(random() * (index + 1));
+        const current = items[index];
+        const swap = items[swapIndex];
+        if (current !== undefined && swap !== undefined) {
+            items[index] = swap;
+            items[swapIndex] = current;
+        }
+    }
+    return items;
+}
+function pickWeightedGridCell(cells, random) {
+    let totalWeight = 0;
+    for (const candidate of cells) {
+        totalWeight += Math.max(0, candidate.weight);
+    }
+    if (totalWeight <= 0) {
+        return null;
+    }
+    let remaining = random() * totalWeight;
+    for (const candidate of cells) {
+        remaining -= Math.max(0, candidate.weight);
+        if (remaining <= 0) {
+            return candidate.cell;
+        }
+    }
+    return cells[cells.length - 1]?.cell ?? null;
+}

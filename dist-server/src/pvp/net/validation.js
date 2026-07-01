@@ -92,11 +92,45 @@ function isSnakeHeads(value) {
     }
     return PLAYER_SLOTS.every((slot) => value[slot] === null || isValidGridCell(value[slot]));
 }
+function isGridCellList(value) {
+    return Array.isArray(value)
+        && value.length <= PVP_LIMITS.maxBoardCoordinate
+        && value.every(isValidGridCell);
+}
 function isAliveMap(value) {
     if (!isRecord(value)) {
         return false;
     }
     return PLAYER_SLOTS.every((slot) => typeof value[slot] === "boolean");
+}
+function isPvpPlayerSnapshot(value) {
+    if (!isRecord(value)) {
+        return false;
+    }
+    return (isPlayerSlot(value.playerSlot)
+        && isGridCellList(value.snake)
+        && isDirection(value.direction)
+        && isBoundedInteger(value.score, 0, Number.MAX_SAFE_INTEGER)
+        && isBoundedInteger(value.coresEaten, 0, Number.MAX_SAFE_INTEGER)
+        && typeof value.alive === "boolean"
+        && (value.deathReason === null || isGameOverReason(value.deathReason))
+        && isBoundedInteger(value.lastProcessedSeq, 0, PVP_LIMITS.maxSeq));
+}
+function isPvpPlayerSnapshotList(value) {
+    if (!Array.isArray(value) || value.length !== PLAYER_SLOTS.length) {
+        return false;
+    }
+    const seenSlots = new Set();
+    for (const player of value) {
+        if (!isPvpPlayerSnapshot(player) || seenSlots.has(player.playerSlot)) {
+            return false;
+        }
+        seenSlots.add(player.playerSlot);
+    }
+    return true;
+}
+export function hasFullPvpSnapshot(message) {
+    return isGridCellList(message.foods) && isPvpPlayerSnapshotList(message.players);
 }
 function isRoomPlayer(value) {
     if (!isRecord(value)) {
@@ -154,6 +188,9 @@ function isOptionalSessionToken(value) {
 function isOptionalQueuePosition(value) {
     return value === undefined || isBoundedInteger(value, 1, PVP_LIMITS.maxQueuePosition);
 }
+function isOptionalEstimatedWaitMs(value) {
+    return value === undefined || isBoundedInteger(value, 0, PVP_LIMITS.maxWaitingMs);
+}
 function isRetryAfterMs(value) {
     return value === undefined || isBoundedInteger(value, 0, PVP_LIMITS.maxWaitingMs);
 }
@@ -199,6 +236,7 @@ function validateServerRecord(message) {
         case "queueState":
             return (isOptionalQueuePosition(message.position)
                 && isBoundedInteger(message.waitingMs, 0, PVP_LIMITS.maxWaitingMs)
+                && isOptionalEstimatedWaitMs(message.estimatedWaitMs)
                 && isBoundedInteger(message.onlineCount, 0, PVP_LIMITS.maxOnlineCount)
                 && isBoundedInteger(message.queuedCount, 0, PVP_LIMITS.maxQueuedCount));
         case "countdown":
@@ -215,7 +253,13 @@ function validateServerRecord(message) {
                 && isValidTick(message.tick)
                 && isDirection(message.direction));
         case "snapshot":
-            return isValidTick(message.tick) && isValidStateHash(message.stateHash) && isSnakeHeads(message.snakeHeads) && isAliveMap(message.alive);
+            return isRoomPhase(message.phase)
+                && isValidTick(message.tick)
+                && isValidStateHash(message.stateHash)
+                && isSnakeHeads(message.snakeHeads)
+                && isAliveMap(message.alive)
+                && ((message.foods === undefined && message.players === undefined)
+                    || (isGridCellList(message.foods) && isPvpPlayerSnapshotList(message.players)));
         case "gameOver":
             return isWinner(message.winner) && isGameOverReason(message.reason) && isValidTick(message.finalTick);
         case "opponentLeft":

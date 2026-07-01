@@ -1,4 +1,8 @@
 import { validateClientMessage, validateServerMessage } from "../src/pvp/net/validation.js";
+let serverMessageRecorder = null;
+export function setServerMessageRecorder(recorder) {
+    serverMessageRecorder = recorder;
+}
 export function decodeClientMessage(data) {
     const text = rawDataToText(data);
     if (text === null) {
@@ -16,6 +20,7 @@ export function sendServerMessage(socket, message) {
     if (!validation.ok) {
         throw new Error(`invalid server message: ${validation.error}`);
     }
+    serverMessageRecorder?.();
     socket.send(JSON.stringify(message));
 }
 export function createInvalidMessageError(detail) {

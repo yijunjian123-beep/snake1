@@ -1,0 +1,506 @@
+import { createPrng } from "../../game/random.js";
+import { buildFoodSpawnContext } from "../../game/spawnRuntime.js";
+import { spawnFoodCell } from "../../game/foodSpawn.js";
+import { commitSnakeMovement, evaluateSnakeAdvance, pickAdvanceDirection } from "../../game/snakeMovementSystem.js";
+import { resolveMultiplayerSnakeCollisions } from "../../game/collisionSystem.js";
+import { OPPOSITE_DIRECTIONS, turnLeft, turnRight } from "../../game/direction.js";
+export const PVP_BOARD_COLUMNS = 28;
+export const PVP_BOARD_ROWS = 18;
+export const PVP_STARTING_LENGTH = 4;
+export const PVP_TARGET_FOOD_COUNT = 3;
+export const PVP_TARGET_STEP_MS = 360;
+export const PVP_MIN_INPUT_INTERVAL_MS = 25;
+export const PVP_MAX_DIRECTION_QUEUE_LENGTH = 2;
+export const PVP_OPENING_SAFETY_STEPS = 30;
+export const PVP_INITIAL_DIRECTIONS = {
+    p1: "right",
+    p2: "right",
+};
+export function createPvpBoardGrid(cellSize = 1, offsetX = 0, offsetY = 0) {
+    return {
+        columns: PVP_BOARD_COLUMNS,
+        rows: PVP_BOARD_ROWS,
+        cellSize,
+        offsetX,
+        offsetY,
+    };
+}
+export function createPvpRuntime(config) {
+    const random = createPrng(config.seed);
+    const players = createPvpPlayers(config.grid);
+    const movementTicksPerStep = getPvpMovementTicksPerStep(config.tickRate);
+    const runtime = {
+        grid: config.grid,
+        match: {
+            mode: config.mode ?? "online-pvp",
+            phase: "playing",
+            startTick: config.startTick,
+            tick: config.startTick,
+            movementStep: 0,
+            winnerId: null,
+        },
+        movementTicksPerStep,
+        players,
+        foods: [],
+        starCores: [],
+        random,
+        inputState: createPvpInputState(),
+    };
+    runtime.foods = createPvpFoods(runtime);
+    return runtime;
+}
+export function getPvpMovementTicksPerStep(tickRate) {
+    if (!Number.isFinite(tickRate) || tickRate <= 0) {
+        return 1;
+    }
+    return Math.max(1, Math.round((tickRate * PVP_TARGET_STEP_MS) / 1_000));
+}
+export function getPvpMovementStepForTick(runtime, tick = runtime.match.tick) {
+    return Math.max(0, Math.floor((tick - runtime.match.startTick) / runtime.movementTicksPerStep));
+}
+export function createPvpPlayers(grid = createPvpBoardGrid()) {
+    const firstHead = getPvpStartingHead(grid.columns, grid.rows, "p1");
+    const secondHead = getPvpStartingHead(grid.columns, grid.rows, "p2");
+    return [
+        createPvpPlayer(grid, "p1", firstHead, PVP_INITIAL_DIRECTIONS.p1),
+        createPvpPlayer(grid, "p2", secondHead, PVP_INITIAL_DIRECTIONS.p2),
+    ];
+}
+export function createPvpInputState() {
+    const playersById = new Map();
+    for (const playerId of ["p1", "p2"]) {
+        playersById.set(playerId, createPvpPlayerInputState(playerId));
+    }
+    return {
+        playersById,
+    };
+}
+export function createPvpPlayerInputState(playerId) {
+    return {
+        seenSequences: new Set(),
+        initialDirection: PVP_INITIAL_DIRECTIONS[playerId],
+        lastDirection: PVP_INITIAL_DIRECTIONS[playerId],
+        lastInputAt: 0,
+        lastTick: -1,
+        lastProcessedTick: -1,
+        lastAppliedSequence: 0,
+        recentInputs: [],
+    };
+}
+export function recordPvpInput(inputState, playerId, seq, tick, direction, inputDelayTicks, now = Date.now()) {
+    const playerInputState = getPvpPlayerInputState(inputState, playerId);
+    if (playerInputState.seenSequences.has(seq)) {
+        return false;
+    }
+    if (now - playerInputState.lastInputAt < PVP_MIN_INPUT_INTERVAL_MS) {
+        return false;
+    }
+    if (isStalePvpInput(tick, playerInputState.lastTick, inputDelayTicks)) {
+        return false;
+    }
+    const previousInput = findPreviousPvpInput(playerInputState.recentInputs, tick, seq);
+    const previousDirection = previousInput?.direction ?? playerInputState.initialDirection;
+    if (direction === OPPOSITE_DIRECTIONS[previousDirection]) {
+        return false;
+    }
+    playerInputState.seenSequences.add(seq);
+    playerInputState.lastInputAt = now;
+    playerInputState.lastTick = Math.max(playerInputState.lastTick, tick);
+    playerInputState.lastDirection = direction;
+    insertPvpInputRecord(playerInputState.recentInputs, {
+        seq,
+        tick,
+        direction,
+    });
+    return true;
+}
+export function applyPvpInputsForTick(runtime, tick) {
+    for (const player of runtime.players) {
+        const playerInputState = getPvpPlayerInputState(runtime.inputState, player.id);
+        let lastAppliedSequence = playerInputState.lastAppliedSequence;
+        for (const input of playerInputState.recentInputs) {
+            if (input.tick > tick || input.seq <= lastAppliedSequence) {
+                continue;
+            }
+            queuePvpDirection(player, input.direction);
+            lastAppliedSequence = Math.max(lastAppliedSequence, input.seq);
+        }
+        playerInputState.lastAppliedSequence = lastAppliedSequence;
+        playerInputState.lastProcessedTick = tick;
+        playerInputState.recentInputs = playerInputState.recentInputs.filter((input) => input.tick > tick);
+    }
+}
+export function queuePvpDirection(player, direction) {
+    const lastQueuedDirection = player.movement.directionQueue.at(-1) ?? player.movement.direction;
+    if (direction === lastQueuedDirection
+        || direction === OPPOSITE_DIRECTIONS[lastQueuedDirection]
+        || player.movement.directionQueue.length >= PVP_MAX_DIRECTION_QUEUE_LENGTH) {
+        return false;
+    }
+    player.movement.directionQueue.push(direction);
+    return true;
+}
+export function advancePvpTick(runtime) {
+    if (runtime.match.phase === "gameOver") {
+        return {
+            snapshot: createPvpSnapshot(runtime),
+            gameOver: null,
+        };
+    }
+    runtime.match.tick += 1;
+    applyPvpInputsForTick(runtime, runtime.match.tick);
+    if (!shouldAdvancePvpMovement(runtime)) {
+        return {
+            snapshot: createPvpSnapshot(runtime),
+            gameOver: null,
+        };
+    }
+    runtime.match.movementStep = getPvpMovementStepForTick(runtime);
+    const evaluations = [];
+    for (const player of runtime.players) {
+        if (player.lifecycle.phase !== "playing") {
+            continue;
+        }
+        const queuedDirection = player.movement.directionQueue.shift();
+        const intendedDirection = queuedDirection ?? player.movement.direction;
+        const context = buildPvpMovementContext(runtime, player, false);
+        const primaryEvaluation = evaluateSnakeAdvance(context, intendedDirection);
+        const selection = pickAdvanceDirection(context, intendedDirection, getPvpAdvanceFallbackDirections(runtime, player, intendedDirection, queuedDirection !== undefined, primaryEvaluation));
+        const evaluation = evaluateSnakeAdvance(context, selection.direction);
+        if (!evaluation) {
+            finishPvpPlayer(player, "unknown");
+            continue;
+        }
+        evaluations.push({
+            playerId: player.id,
+            direction: selection.direction,
+            evaluation: evaluation,
+            player,
+        });
+    }
+    const collisions = resolveMultiplayerSnakeCollisions({
+        grid: runtime.grid,
+        blackHoles: [],
+        starBeasts: [],
+        currentTime: 0,
+    }, evaluations.map((entry) => ({
+        playerId: entry.playerId,
+        direction: entry.direction,
+        evaluation: entry.evaluation,
+        snake: entry.player.snake,
+        willCommit: entry.player.lifecycle.phase === "playing",
+    })));
+    for (const entry of evaluations) {
+        const result = collisions.find((candidate) => candidate.playerId === entry.playerId);
+        if (!result || entry.player.lifecycle.phase !== "playing") {
+            continue;
+        }
+        if (result.collision.kind !== "none") {
+            finishPvpPlayer(entry.player, result.collision.kind === "wall" ? "wall" : result.collision.reason);
+            continue;
+        }
+        entry.player.movement.direction = entry.direction;
+        const moveResult = commitSnakeMovement({
+            grid: runtime.grid,
+            snake: entry.player.snake,
+            snakeOccupancy: entry.player.movement.snakeOccupancy,
+            pendingGrowthSegments: entry.player.movement.pendingGrowthSegments,
+        }, entry.evaluation);
+        entry.player.movement.pendingGrowthSegments = moveResult.pendingGrowthSegments;
+        if (!result.pickupConflict && moveResult.pickup?.kind === "food") {
+            runtime.foods.splice(moveResult.pickup.index, 1);
+            entry.player.progress.coresEaten += 1;
+            entry.player.progress.score += 10;
+        }
+    }
+    refillPvpFoods(runtime);
+    const outcome = resolvePvpOutcome(runtime);
+    if (outcome !== null) {
+        runtime.match.phase = "gameOver";
+        runtime.match.winnerId = outcome.winner === "draw" ? null : outcome.winner;
+    }
+    return {
+        snapshot: createPvpSnapshot(runtime),
+        gameOver: outcome === null ? null : {
+            type: "gameOver",
+            winner: outcome.winner,
+            reason: outcome.reason,
+            finalTick: runtime.match.tick,
+        },
+    };
+}
+export function createPvpSnapshot(runtime) {
+    const alive = {
+        p1: runtime.players[0].lifecycle.phase === "playing",
+        p2: runtime.players[1].lifecycle.phase === "playing",
+    };
+    const snakeHeads = {
+        p1: toPvpGridCell(runtime.players[0].snake[0] ?? null),
+        p2: toPvpGridCell(runtime.players[1].snake[0] ?? null),
+    };
+    const players = runtime.players.map((player) => {
+        const inputState = getPvpPlayerInputState(runtime.inputState, player.id);
+        return {
+            playerSlot: player.id,
+            snake: player.snake.map(toRequiredPvpGridCell),
+            direction: player.movement.direction,
+            score: player.progress.score,
+            coresEaten: player.progress.coresEaten,
+            alive: player.lifecycle.phase === "playing",
+            deathReason: player.lifecycle.phase === "playing" ? null : player.lifecycle.deathReason ?? "unknown",
+            lastProcessedSeq: inputState.lastAppliedSequence,
+        };
+    });
+    return {
+        phase: runtime.match.phase === "gameOver" ? "finished" : "playing",
+        tick: runtime.match.tick,
+        stateHash: hashPvpSnapshot({
+            tick: runtime.match.tick,
+            phase: runtime.match.phase === "gameOver" ? "finished" : "playing",
+            winnerId: runtime.match.winnerId,
+            players: runtime.players,
+            foods: runtime.foods,
+        }),
+        snakeHeads,
+        alive,
+        foods: runtime.foods.map(toRequiredPvpGridCell),
+        players,
+    };
+}
+export function hashPvpSnapshot(input) {
+    const parts = [
+        `tick:${input.tick}`,
+        `phase:${input.phase}`,
+        `winner:${input.winnerId ?? "null"}`,
+    ];
+    for (const player of input.players) {
+        parts.push(`${player.id}:${player.lifecycle.phase}:${player.lifecycle.deathReason ?? "null"}:${player.progress.score}:${player.progress.coresEaten}:${player.movement.direction}`, player.snake.map((cell) => `${cell.column},${cell.row}`).join("|"));
+    }
+    parts.push("foods", input.foods.map((cell) => `${cell.column},${cell.row}`).join("|"));
+    return `pvp:${hashText(parts.join(";"))}`;
+}
+export function getPvpOutcome(runtime) {
+    return resolvePvpOutcome(runtime);
+}
+export function createPvpGridSummary(runtime) {
+    return {
+        columns: runtime.grid.columns,
+        rows: runtime.grid.rows,
+        cellSize: runtime.grid.cellSize,
+    };
+}
+function createPvpPlayer(grid, id, head, direction) {
+    const snake = createStartingSnake(head, direction);
+    const player = {
+        id,
+        snake,
+        movement: {
+            direction,
+            directionQueue: [],
+            snakeOccupancy: new Uint8Array(grid.columns * grid.rows),
+            pendingGrowthSegments: 0,
+        },
+        progress: {
+            score: 0,
+            coresEaten: 0,
+        },
+        lifecycle: {
+            phase: "playing",
+            deathReason: null,
+        },
+    };
+    rebuildPlayerSnakeOccupancy(player, grid);
+    return player;
+}
+function createPvpFoods(runtime) {
+    const foods = [];
+    while (foods.length < PVP_TARGET_FOOD_COUNT) {
+        const candidate = spawnFoodCell(buildFoodSpawnContext({
+            grid: runtime.grid,
+            blackHoles: [],
+            snake: runtime.players.flatMap((player) => player.snake),
+            foods,
+            starAttractors: [],
+            starBeasts: [],
+            starCores: runtime.starCores,
+            includeStarAttractors: false,
+        }), runtime.random);
+        if (!candidate) {
+            break;
+        }
+        foods.push(candidate);
+    }
+    return foods;
+}
+function refillPvpFoods(runtime) {
+    while (runtime.foods.length < PVP_TARGET_FOOD_COUNT) {
+        const candidate = spawnFoodCell(buildFoodSpawnContext({
+            grid: runtime.grid,
+            blackHoles: [],
+            snake: runtime.players.flatMap((player) => player.snake),
+            foods: runtime.foods,
+            starAttractors: [],
+            starBeasts: [],
+            starCores: runtime.starCores,
+            includeStarAttractors: false,
+        }), runtime.random);
+        if (!candidate) {
+            break;
+        }
+        runtime.foods.push(candidate);
+    }
+}
+function buildPvpMovementContext(runtime, player, includeOpponentBodies) {
+    const opponentBodies = includeOpponentBodies
+        ? runtime.players
+            .filter((candidate) => candidate.id !== player.id && candidate.lifecycle.phase === "playing")
+            .flatMap((candidate) => candidate.snake)
+        : undefined;
+    return {
+        grid: runtime.grid,
+        snake: player.snake,
+        foods: runtime.foods,
+        starCores: runtime.starCores,
+        starAttractors: [],
+        snakeOccupancy: player.movement.snakeOccupancy,
+        pendingGrowthSegments: player.movement.pendingGrowthSegments,
+        includeStarAttractors: false,
+        extraBlockedCells: opponentBodies,
+    };
+}
+function resolvePvpOutcome(runtime) {
+    const alivePlayers = runtime.players.filter((player) => player.lifecycle.phase === "playing");
+    if (alivePlayers.length > 1) {
+        return null;
+    }
+    if (alivePlayers.length === 0) {
+        return {
+            winner: "draw",
+            reason: "draw",
+        };
+    }
+    return {
+        winner: alivePlayers[0]?.id ?? null,
+        reason: runtime.players.find((player) => player.lifecycle.phase === "gameOver")?.lifecycle.deathReason ?? "unknown",
+    };
+}
+function shouldAdvancePvpMovement(runtime) {
+    const elapsedTicks = runtime.match.tick - runtime.match.startTick;
+    return elapsedTicks > 0 && elapsedTicks % runtime.movementTicksPerStep === 0;
+}
+function finishPvpPlayer(player, reason) {
+    player.lifecycle.phase = "gameOver";
+    player.lifecycle.deathReason = reason;
+    player.movement.directionQueue.length = 0;
+}
+function getPvpPlayerInputState(inputState, playerId) {
+    const existing = inputState.playersById.get(playerId);
+    if (existing) {
+        return existing;
+    }
+    const created = createPvpPlayerInputState(playerId);
+    inputState.playersById.set(playerId, created);
+    return created;
+}
+function getPvpStartingHead(columns, rows, playerId) {
+    const isFirst = playerId === "p1";
+    const openingColumn = Math.min(columns - 1, Math.max(PVP_STARTING_LENGTH - 1, Math.floor(columns * 0.16)));
+    return {
+        column: openingColumn,
+        row: clampGridIndex(isFirst ? Math.floor(rows * 0.32) : Math.ceil(rows * 0.68), rows),
+    };
+}
+function getPvpAdvanceFallbackDirections(runtime, player, intendedDirection, usedQueuedDirection, primaryEvaluation) {
+    const fallbacks = [player.movement.direction];
+    if (!shouldUseOpeningSafetyTurn(runtime, player, usedQueuedDirection, primaryEvaluation)) {
+        return fallbacks;
+    }
+    const preferredTurn = turnRight(intendedDirection);
+    const secondaryTurn = turnLeft(intendedDirection);
+    fallbacks.push(preferredTurn, secondaryTurn);
+    return fallbacks;
+}
+function shouldUseOpeningSafetyTurn(runtime, player, usedQueuedDirection, primaryEvaluation) {
+    if (usedQueuedDirection
+        || runtime.match.movementStep > PVP_OPENING_SAFETY_STEPS
+        || player.snake.length < PVP_STARTING_LENGTH
+        || primaryEvaluation?.isOutOfBounds !== true) {
+        return false;
+    }
+    return getPvpPlayerInputState(runtime.inputState, player.id).seenSequences.size === 0;
+}
+function createStartingSnake(head, direction) {
+    const delta = direction === "right"
+        ? { column: -1, row: 0 }
+        : direction === "left"
+            ? { column: 1, row: 0 }
+            : direction === "down"
+                ? { column: 0, row: -1 }
+                : { column: 0, row: 1 };
+    return Array.from({ length: PVP_STARTING_LENGTH }, (_, index) => ({
+        column: head.column + delta.column * index,
+        row: head.row + delta.row * index,
+    }));
+}
+function rebuildPlayerSnakeOccupancy(player, grid) {
+    const cellCount = grid.columns * grid.rows;
+    if (player.movement.snakeOccupancy.length !== cellCount) {
+        player.movement.snakeOccupancy = new Uint8Array(cellCount);
+    }
+    else {
+        player.movement.snakeOccupancy.fill(0);
+    }
+    for (const segment of player.snake) {
+        const index = segment.row * grid.columns + segment.column;
+        player.movement.snakeOccupancy[index] = 1;
+    }
+}
+function insertPvpInputRecord(inputs, record) {
+    const insertionIndex = inputs.findIndex((existing) => (existing.tick > record.tick
+        || (existing.tick === record.tick && existing.seq > record.seq)));
+    if (insertionIndex === -1) {
+        inputs.push(record);
+        return;
+    }
+    inputs.splice(insertionIndex, 0, record);
+}
+function findPreviousPvpInput(inputs, tick, seq) {
+    let previous;
+    for (const input of inputs) {
+        if (input.tick > tick || (input.tick === tick && input.seq >= seq)) {
+            break;
+        }
+        previous = input;
+    }
+    return previous;
+}
+function isStalePvpInput(messageTick, lastTick, inputDelayTicks) {
+    return lastTick >= 0 && messageTick + inputDelayTicks < lastTick;
+}
+function clampGridIndex(value, size) {
+    return Math.max(0, Math.min(size - 1, value));
+}
+function toPvpGridCell(cell) {
+    if (cell === null) {
+        return null;
+    }
+    return toRequiredPvpGridCell(cell);
+}
+function toRequiredPvpGridCell(cell) {
+    return {
+        column: cell.column,
+        row: cell.row,
+    };
+}
+function hashText(input) {
+    let hashA = 0x811c9dc5;
+    let hashB = 0x27d4eb2d;
+    for (let index = 0; index < input.length; index += 1) {
+        const code = input.charCodeAt(index);
+        hashA ^= code;
+        hashA = Math.imul(hashA, 0x01000193);
+        hashB ^= code;
+        hashB = Math.imul(hashB, 0x85ebca6b);
+    }
+    return `${(hashA >>> 0).toString(16).padStart(8, "0")}${(hashB >>> 0).toString(16).padStart(8, "0")}`;
+}
