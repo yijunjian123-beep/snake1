@@ -17,6 +17,7 @@ import type {
   GameOverReason,
   PvpAliveMap,
   PvpGridCell,
+  PvpPlayerSnapshot,
   PvpStateHash,
   PvpWinner,
   PlayerSlot,
@@ -117,6 +118,8 @@ export interface PvpGameSnapshot {
   readonly stateHash: PvpStateHash;
   readonly snakeHeads: Readonly<Record<PlayerSlot, PvpGridCell | null>>;
   readonly alive: PvpAliveMap;
+  readonly foods: readonly PvpGridCell[];
+  readonly players: readonly PvpPlayerSnapshot[];
 }
 
 export function createPvpBoardGrid(cellSize = 1, offsetX = 0, offsetY = 0): GridMetrics {
@@ -409,6 +412,20 @@ export function createPvpSnapshot(runtime: PvpRuntimeState): PvpGameSnapshot {
     p1: toPvpGridCell(runtime.players[0].snake[0] ?? null),
     p2: toPvpGridCell(runtime.players[1].snake[0] ?? null),
   };
+  const players = runtime.players.map((player) => {
+    const inputState = getPvpPlayerInputState(runtime.inputState, player.id);
+
+    return {
+      playerSlot: player.id,
+      snake: player.snake.map(toRequiredPvpGridCell),
+      direction: player.movement.direction,
+      score: player.progress.score,
+      coresEaten: player.progress.coresEaten,
+      alive: player.lifecycle.phase === "playing",
+      deathReason: player.lifecycle.phase === "playing" ? null : player.lifecycle.deathReason ?? "unknown",
+      lastProcessedSeq: inputState.lastAppliedSequence,
+    } satisfies PvpPlayerSnapshot;
+  });
 
   return {
     phase: runtime.match.phase === "gameOver" ? "finished" : "playing",
@@ -422,6 +439,8 @@ export function createPvpSnapshot(runtime: PvpRuntimeState): PvpGameSnapshot {
     }),
     snakeHeads,
     alive,
+    foods: runtime.foods.map(toRequiredPvpGridCell),
+    players,
   };
 }
 
@@ -742,6 +761,10 @@ function toPvpGridCell(cell: GridCell | null): PvpGridCell | null {
     return null;
   }
 
+  return toRequiredPvpGridCell(cell);
+}
+
+function toRequiredPvpGridCell(cell: GridCell): PvpGridCell {
   return {
     column: cell.column,
     row: cell.row,

@@ -151,6 +151,10 @@ export function createInputController(options: InputControllerOptions = {}): Inp
     event.preventDefault();
     setJoystickVisuals(controls, deltaX, deltaY);
 
+    if (activeJoystickAction === action) {
+      return;
+    }
+
     if (activeJoystickAction && activeJoystickAction !== action) {
       emit({ action: activeJoystickAction, kind: "released", source: "pointer" });
     }

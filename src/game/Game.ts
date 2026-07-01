@@ -123,11 +123,9 @@ import { createPvpConnectionController, resolvePvpWebSocketUrl, type PvpConnecti
 import type { PvpConnectionState } from "../pvp/net/state.js";
 import type { ServerGameOverMessage, ServerPeerInputMessage, ServerSnapshotMessage } from "../pvp/net/protocol.js";
 import {
-  advancePvpTick,
   createPvpBoardGrid,
   createPvpPlayers,
   createPvpRuntime,
-  createPvpSnapshot,
   getPvpMovementStepForTick,
   recordPvpInput,
   type PvpGameSnapshot,
@@ -162,6 +160,19 @@ interface ResetMatchRunOptions {
   readonly seed?: number;
   readonly startTick?: number;
   readonly localPlayerId?: PlayerId;
+}
+
+function normalizePvpDeathReason(reason: ServerGameOverMessage["reason"] | null): DeathReason {
+  switch (reason) {
+    case "wall":
+    case "snake_body":
+    case "head_to_head":
+    case "black_hole":
+    case "star_beast":
+      return reason;
+    default:
+      return "unknown";
+  }
 }
 
 const BASE_STEP_MS = 180 / 0.7 / 0.7;
@@ -918,29 +929,11 @@ export class Game {
       return;
     }
 
-    session.tickAccumulatorMs += delta;
-
-    const tickIntervalMs = Math.max(1, Math.round(1_000 / session.tickRate));
-    let advanced = false;
-    let guard = 0;
-
-    while (session.tickAccumulatorMs >= tickIntervalMs && guard < 8) {
-      session.tickAccumulatorMs -= tickIntervalMs;
-      guard += 1;
-      advanced = true;
-
-      const result = advancePvpTick(session.runtime);
-
-      if (result.gameOver !== null && session.lastServerGameOver === null) {
-        session.syncNotice = session.syncNotice ?? "等待服务端结算";
-      }
-    }
-
+    session.tickAccumulatorMs = Math.min(
+      session.tickAccumulatorMs + delta,
+      Math.max(1, Math.round(1_000 / session.tickRate)) * 2,
+    );
     this.syncOnlinePvpRuntimeState();
-
-    if (!advanced && session.runtime.match.phase === "gameOver" && session.lastServerGameOver === null) {
-      session.tickAccumulatorMs = 0;
-    }
   }
 
   private syncOnlinePvpRuntimeState(options: { readonly authoritativeGameOver?: ServerGameOverMessage | null } = {}): void {
@@ -961,7 +954,7 @@ export class Game {
       : authoritativeGameOver.winner === "draw"
         ? null
         : authoritativeGameOver.winner;
-    this.match.phase = authoritativeGameOver === null ? "playing" : "gameOver";
+    this.match.phase = authoritativeGameOver === null ? runtime.match.phase : "gameOver";
 
     for (const runtimePlayer of runtime.players) {
       const appPlayer = this.players.find((player) => player.id === runtimePlayer.id);
@@ -1004,24 +997,66 @@ export class Game {
       runtime.match.phase = "playing";
     }
 
-    for (const runtimePlayer of runtime.players) {
-      const head = message.snakeHeads[runtimePlayer.id];
-      const alive = message.alive[runtimePlayer.id];
+    runtime.foods = message.foods.map((food) => ({ ...food }));
 
-      runtimePlayer.lifecycle.phase = alive ? "playing" : "gameOver";
-      runtimePlayer.lifecycle.deathReason = alive ? null : runtimePlayer.lifecycle.deathReason ?? "unknown";
+    for (const playerSnapshot of message.players) {
+      const runtimePlayer = runtime.players.find((candidate) => candidate.id === playerSnapshot.playerSlot);
 
-      if (head !== null && runtimePlayer.snake[0] !== undefined) {
-        const deltaColumn = head.column - runtimePlayer.snake[0].column;
-        const deltaRow = head.row - runtimePlayer.snake[0].row;
+      if (!runtimePlayer) {
+        continue;
+      }
 
-        runtimePlayer.snake = runtimePlayer.snake.map((cell) => ({
-          column: cell.column + deltaColumn,
-          row: cell.row + deltaRow,
-        }));
+      runtimePlayer.snake = playerSnapshot.snake.map((cell) => ({ ...cell }));
+      runtimePlayer.movement.direction = playerSnapshot.direction;
+      runtimePlayer.movement.directionQueue.length = 0;
+      runtimePlayer.progress.score = playerSnapshot.score;
+      runtimePlayer.progress.coresEaten = playerSnapshot.coresEaten;
+      runtimePlayer.lifecycle.phase = playerSnapshot.alive ? "playing" : "gameOver";
+      runtimePlayer.lifecycle.deathReason = playerSnapshot.alive ? null : normalizePvpDeathReason(playerSnapshot.deathReason);
+
+      const inputState = runtime.inputState.playersById.get(playerSnapshot.playerSlot);
+
+      if (inputState) {
+        inputState.lastAppliedSequence = Math.max(inputState.lastAppliedSequence, playerSnapshot.lastProcessedSeq);
+        inputState.recentInputs = inputState.recentInputs.filter((input) => (
+          input.seq > playerSnapshot.lastProcessedSeq
+          && input.tick + session.inputDelayTicks >= message.tick
+        ));
       }
 
       this.rebuildOnlinePvpSnakeOccupancy(runtimePlayer, runtime.grid);
+    }
+
+    this.discardConfirmedOnlineInputs(message);
+  }
+
+  private discardConfirmedOnlineInputs(message: ServerSnapshotMessage): void {
+    const confirmedSeqByPlayer = new Map<PlayerId, number>();
+
+    for (const player of message.players) {
+      confirmedSeqByPlayer.set(player.playerSlot, player.lastProcessedSeq);
+    }
+
+    const session = this.onlineSession;
+
+    this.inputState.queue = this.inputState.queue.filter((command) => {
+      const confirmedSequence = confirmedSeqByPlayer.get(command.playerId);
+
+      return (
+        (confirmedSequence === undefined || command.sequence > confirmedSequence)
+        && (session === null || command.tick + session.inputDelayTicks >= message.tick)
+      );
+    });
+
+    for (const [playerId, confirmedSequence] of confirmedSeqByPlayer) {
+      this.inputState.lastAppliedSequenceByPlayer[playerId] = Math.max(
+        this.inputState.lastAppliedSequenceByPlayer[playerId] ?? 0,
+        confirmedSequence,
+      );
+      this.inputState.lastProcessedTickByPlayer[playerId] = Math.max(
+        this.inputState.lastProcessedTickByPlayer[playerId] ?? -1,
+        message.tick,
+      );
     }
   }
 
@@ -1653,26 +1688,16 @@ export class Game {
     }
 
     const session = this.onlineSession;
-    const predictedSnapshot = createPvpSnapshot(session.runtime);
 
-    session.latestSnapshot = {
-      phase: message.phase,
-      tick: message.tick,
-      stateHash: message.stateHash,
-      snakeHeads: message.snakeHeads,
-      alive: message.alive,
-    };
+    if (message.tick < session.lastSnapshotTick) {
+      return;
+    }
+
+    session.latestSnapshot = message;
     session.lastSnapshotHash = message.stateHash;
     session.lastSnapshotTick = message.tick;
-
-    if (predictedSnapshot.stateHash !== message.stateHash) {
-      session.syncNotice = this.debugPvpVisible
-        ? `同步修正 tick ${message.tick}`
-        : "已按服务端同步修正";
-      this.applyOnlinePvpSnapshotCorrection(message);
-    } else if (session.syncNotice !== null) {
-      session.syncNotice = null;
-    }
+    session.syncNotice = null;
+    this.applyOnlinePvpSnapshotCorrection(message);
 
     this.syncOnlinePvpRuntimeState();
     this.syncUi(true);

@@ -92,6 +92,17 @@ export interface PvpGridCell {
   readonly row: number;
 }
 
+export interface PvpPlayerSnapshot {
+  readonly playerSlot: PlayerSlot;
+  readonly snake: readonly PvpGridCell[];
+  readonly direction: Direction;
+  readonly score: number;
+  readonly coresEaten: number;
+  readonly alive: boolean;
+  readonly deathReason: GameOverReason | null;
+  readonly lastProcessedSeq: PvpInputSeq;
+}
+
 export type PvpSnakeHeads = Readonly<Record<PlayerSlot, PvpGridCell | null>>;
 export type PvpAliveMap = Readonly<Record<PlayerSlot, boolean>>;
 
@@ -249,6 +260,8 @@ export interface ServerSnapshotMessage {
   readonly stateHash: PvpStateHash;
   readonly snakeHeads: PvpSnakeHeads;
   readonly alive: PvpAliveMap;
+  readonly foods: readonly PvpGridCell[];
+  readonly players: readonly PvpPlayerSnapshot[];
 }
 
 export interface ServerGameOverMessage {

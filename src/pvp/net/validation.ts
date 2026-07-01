@@ -15,6 +15,7 @@ import type {
   PvpAliveMap,
   PvpGridCell,
   PvpPlayerId,
+  PvpPlayerSnapshot,
   PvpRoomPlayer,
   PvpSessionToken,
   PvpSnakeHeads,
@@ -161,12 +162,53 @@ function isSnakeHeads(value: unknown): value is PvpSnakeHeads {
   return PLAYER_SLOTS.every((slot) => value[slot] === null || isValidGridCell(value[slot]));
 }
 
+function isGridCellList(value: unknown): value is readonly PvpGridCell[] {
+  return Array.isArray(value)
+    && value.length <= PVP_LIMITS.maxBoardCoordinate
+    && value.every(isValidGridCell);
+}
+
 function isAliveMap(value: unknown): value is PvpAliveMap {
   if (!isRecord(value)) {
     return false;
   }
 
   return PLAYER_SLOTS.every((slot) => typeof value[slot] === "boolean");
+}
+
+function isPvpPlayerSnapshot(value: unknown): value is PvpPlayerSnapshot {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return (
+    isPlayerSlot(value.playerSlot)
+    && isGridCellList(value.snake)
+    && isDirection(value.direction)
+    && isBoundedInteger(value.score, 0, Number.MAX_SAFE_INTEGER)
+    && isBoundedInteger(value.coresEaten, 0, Number.MAX_SAFE_INTEGER)
+    && typeof value.alive === "boolean"
+    && (value.deathReason === null || isGameOverReason(value.deathReason))
+    && isBoundedInteger(value.lastProcessedSeq, 0, PVP_LIMITS.maxSeq)
+  );
+}
+
+function isPvpPlayerSnapshotList(value: unknown): value is readonly PvpPlayerSnapshot[] {
+  if (!Array.isArray(value) || value.length !== PLAYER_SLOTS.length) {
+    return false;
+  }
+
+  const seenSlots = new Set<PlayerSlot>();
+
+  for (const player of value) {
+    if (!isPvpPlayerSnapshot(player) || seenSlots.has(player.playerSlot)) {
+      return false;
+    }
+
+    seenSlots.add(player.playerSlot);
+  }
+
+  return true;
 }
 
 function isRoomPlayer(value: unknown): value is PvpRoomPlayer {
@@ -325,7 +367,9 @@ function validateServerRecord(message: Record<string, unknown>): boolean {
         && isValidTick(message.tick)
         && isValidStateHash(message.stateHash)
         && isSnakeHeads(message.snakeHeads)
-        && isAliveMap(message.alive);
+        && isAliveMap(message.alive)
+        && isGridCellList(message.foods)
+        && isPvpPlayerSnapshotList(message.players);
     case "gameOver":
       return isWinner(message.winner) && isGameOverReason(message.reason) && isValidTick(message.finalTick);
     case "opponentLeft":

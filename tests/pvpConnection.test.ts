@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import type { ClientToServerMessage, PvpRoomPlayer, ServerToClientMessage } from "../src/pvp/net/protocol.ts";
+import type { ClientToServerMessage, PvpRoomPlayer, ServerSnapshotMessage, ServerToClientMessage } from "../src/pvp/net/protocol.ts";
 import type { WebSocketCloseEventLike, WebSocketFactory, WebSocketLike, WebSocketMessageEventLike } from "../src/pvp/net/PvpClient.ts";
 import { createPvpConnectionController, resolvePvpWebSocketUrl } from "../src/pvp/net/usePvpConnection.ts";
 import type { GameSnapshot } from "../src/game/types.ts";
-import { getPvpMovementTicksPerStep } from "../src/pvp/shared/pvpGame.ts";
 import { createGameHarness } from "./test-support.ts";
 
 function dispatchPointerUp(target: EventTarget): void {
@@ -34,6 +33,54 @@ function createRoomPlayers(players: readonly Partial<PvpRoomPlayer>[]): readonly
     connected: player.connected ?? true,
     nickname: player.nickname,
   }));
+}
+
+function createAuthoritativeSnapshot(
+  overrides: Partial<ServerSnapshotMessage> = {},
+): ServerSnapshotMessage {
+  return {
+    type: "snapshot",
+    phase: "playing",
+    tick: 1,
+    stateHash: "pvp:test_snapshot",
+    snakeHeads: {
+      p1: { column: 4, row: 6 },
+      p2: { column: 22, row: 6 },
+    },
+    alive: { p1: true, p2: true },
+    foods: [{ column: 12, row: 8 }],
+    players: [
+      {
+        playerSlot: "p1",
+        snake: [
+          { column: 4, row: 6 },
+          { column: 3, row: 6 },
+          { column: 2, row: 6 },
+        ],
+        direction: "right",
+        score: 10,
+        coresEaten: 1,
+        alive: true,
+        deathReason: null,
+        lastProcessedSeq: 1,
+      },
+      {
+        playerSlot: "p2",
+        snake: [
+          { column: 22, row: 6 },
+          { column: 21, row: 6 },
+          { column: 20, row: 6 },
+        ],
+        direction: "right",
+        score: 0,
+        coresEaten: 0,
+        alive: true,
+        deathReason: null,
+        lastProcessedSeq: 0,
+      },
+    ],
+    ...overrides,
+  };
 }
 
 class FakeSocket implements WebSocketLike {
@@ -216,15 +263,6 @@ function bootOnlinePvpHarness(
   return socket;
 }
 
-function advanceOnlinePvpTicks(internals: Record<string, unknown>, tickRate: number, ticks: number): void {
-  const advanceOnlinePvp = internals.advanceOnlinePvp as (delta: number) => void;
-  const tickIntervalMs = 1_000 / tickRate;
-
-  for (let index = 0; index < ticks; index += 1) {
-    advanceOnlinePvp.call(internals, tickIntervalMs);
-  }
-}
-
 function projectOnlineSnapshot(harness: ReturnType<typeof createGameHarness>): {
   readonly match: {
     readonly mode: string;
@@ -278,59 +316,6 @@ function projectOnlineSnapshot(harness: ReturnType<typeof createGameHarness>): {
       direction: remotePlayer.direction,
       score: remotePlayer.score,
       snake: remotePlayer.snake.map((cell) => ({ ...cell })),
-    },
-  };
-}
-
-function projectOnlineReplayDelta(
-  before: ReturnType<typeof projectOnlineSnapshot>,
-  after: ReturnType<typeof projectOnlineSnapshot>,
-): {
-  readonly match: ReturnType<typeof projectOnlineSnapshot>["match"];
-  readonly local: {
-    readonly inputOrigin: string;
-    readonly direction: string;
-    readonly scoreDelta: number;
-    readonly snakeDeltas: readonly Readonly<{ column: number; row: number }>[];
-  };
-  readonly remote: {
-    readonly inputOrigin: string;
-    readonly direction: string;
-    readonly scoreDelta: number;
-    readonly snakeDeltas: readonly Readonly<{ column: number; row: number }>[];
-  };
-} {
-  return {
-    match: after.match,
-    local: {
-      inputOrigin: after.local.inputOrigin,
-      direction: after.local.direction,
-      scoreDelta: after.local.score - before.local.score,
-      snakeDeltas: after.local.snake.map((cell, index) => {
-        const baselineCell = before.local.snake[index];
-
-        assert.ok(baselineCell);
-
-        return {
-          column: cell.column - baselineCell.column,
-          row: cell.row - baselineCell.row,
-        };
-      }),
-    },
-    remote: {
-      inputOrigin: after.remote.inputOrigin,
-      direction: after.remote.direction,
-      scoreDelta: after.remote.score - before.remote.score,
-      snakeDeltas: after.remote.snake.map((cell, index) => {
-        const baselineCell = before.remote.snake[index];
-
-        assert.ok(baselineCell);
-
-        return {
-          column: cell.column - baselineCell.column,
-          row: cell.row - baselineCell.row,
-        };
-      }),
     },
   };
 }
@@ -900,52 +885,42 @@ test("online PVP sends local input and queues peerInput through the same tick pa
       direction: "up",
     });
 
-    socket.emitServerMessage({
-      type: "peerInput",
-      playerSlot: "p2",
-      seq: 5,
-      tick: 2,
-      direction: "up",
-    });
+    socket.emitServerMessage(createAuthoritativeSnapshot({
+      tick: 4,
+      players: [
+        {
+          playerSlot: "p1",
+          snake: [{ column: 4, row: 5 }, { column: 4, row: 6 }, { column: 3, row: 6 }],
+          direction: "up",
+          score: 10,
+          coresEaten: 1,
+          alive: true,
+          deathReason: null,
+          lastProcessedSeq: 1,
+        },
+        {
+          playerSlot: "p2",
+          snake: [{ column: 22, row: 5 }, { column: 22, row: 6 }, { column: 21, row: 6 }],
+          direction: "up",
+          score: 0,
+          coresEaten: 0,
+          alive: true,
+          deathReason: null,
+          lastProcessedSeq: 0,
+        },
+      ],
+    }));
 
-    const inputState = internals.inputState as {
-      readonly queue: Array<{
-        readonly playerId: string;
-        readonly tick: number;
-        readonly action: string;
-        readonly kind: string;
-        readonly origin: string;
-        readonly sequence: number;
-      }>;
-    };
-    const remoteQueued = inputState.queue.find((command) => command.playerId === "p2");
-
-    assert.deepEqual(remoteQueued, {
-      playerId: "p2",
-      tick: 2,
-      action: "move-up",
-      kind: "pressed",
-      origin: "remote",
-      sequence: 5,
-    });
-
-    advanceOnlinePvpTicks(internals, 20, getPvpMovementTicksPerStep(20));
-
-    assert.equal((internals.createSnapshot as () => GameSnapshot)().players.find((player) => player.id === "p1")?.direction, "up");
-    assert.equal((internals.createSnapshot as () => GameSnapshot)().players.find((player) => player.id === "p2")?.direction, "up");
+    const snapshot = (internals.createSnapshot as () => GameSnapshot)();
+    assert.equal(snapshot.players.find((player) => player.id === "p1")?.direction, "up");
+    assert.equal(snapshot.players.find((player) => player.id === "p2")?.direction, "up");
+    assert.deepEqual(snapshot.players.find((player) => player.id === "p1")?.snake[0], { column: 4, row: 5 });
   } finally {
     harness.cleanup();
   }
 });
 
-test("two online clients with the same seed and role-based inputs stay in sync", () => {
-  const firstProjection = runOnlineReplay("p1");
-  const secondProjection = runOnlineReplay("p2");
-
-  assert.deepEqual(firstProjection, secondProjection);
-});
-
-test("server snapshots flag mismatches and server gameOver overrides local predictions", () => {
+test("server snapshots fully replace online state and stale snapshots are ignored", () => {
   const socketHarness = new FakeSocketFactoryHarness();
   const harness = createGameHarness({
     pvpConnectionOptions: {
@@ -957,39 +932,80 @@ test("server snapshots flag mismatches and server gameOver overrides local predi
   try {
     const socket = bootOnlinePvpHarness(harness, socketHarness, "p1");
     const internals = harness.game as unknown as Record<string, unknown>;
-    const onlineSession = internals.onlineSession as {
-      runtime: {
-        match: { phase: string; winnerId: string | null };
-      };
-    };
 
-    onlineSession.runtime.match.phase = "gameOver";
-    onlineSession.runtime.match.winnerId = "p1";
-    (internals.match as { phase: string; winnerId: string | null }).phase = "gameOver";
-    (internals.match as { phase: string; winnerId: string | null }).winnerId = "p1";
+    socket.emitServerMessage(createAuthoritativeSnapshot({
+      tick: 5,
+      foods: [{ column: 12, row: 9 }],
+      players: [
+        {
+          playerSlot: "p1",
+          snake: [{ column: 8, row: 7 }, { column: 7, row: 7 }],
+          direction: "right",
+          score: 20,
+          coresEaten: 2,
+          alive: true,
+          deathReason: null,
+          lastProcessedSeq: 3,
+        },
+        {
+          playerSlot: "p2",
+          snake: [{ column: 18, row: 7 }, { column: 17, row: 7 }],
+          direction: "right",
+          score: 10,
+          coresEaten: 1,
+          alive: true,
+          deathReason: null,
+          lastProcessedSeq: 2,
+        },
+      ],
+    }));
 
-    socket.emitServerMessage({
-      type: "snapshot",
-      phase: "playing",
-      tick: 1,
-      stateHash: "pvp:deadbeefdeadbeef",
-      snakeHeads: {
-        p1: { column: 4, row: 6 },
-        p2: { column: 22, row: 6 },
-      },
-      alive: { p1: true, p2: true },
-    });
+    let snapshot = (internals.createSnapshot as () => GameSnapshot)();
+    assert.equal(snapshot.match.tick, 5);
+    assert.deepEqual(snapshot.players.find((player) => player.id === "p1")?.snake, [
+      { column: 8, row: 7 },
+      { column: 7, row: 7 },
+    ]);
+    assert.deepEqual(snapshot.foods, [{ column: 12, row: 9 }]);
 
-    assert.equal(harness.ui.panelMetaLabel.textContent, "已按服务端同步修正");
+    socket.emitServerMessage(createAuthoritativeSnapshot({
+      tick: 4,
+      players: [
+        {
+          playerSlot: "p1",
+          snake: [{ column: 1, row: 1 }],
+          direction: "down",
+          score: 0,
+          coresEaten: 0,
+          alive: true,
+          deathReason: null,
+          lastProcessedSeq: 0,
+        },
+        {
+          playerSlot: "p2",
+          snake: [{ column: 2, row: 2 }],
+          direction: "down",
+          score: 0,
+          coresEaten: 0,
+          alive: true,
+          deathReason: null,
+          lastProcessedSeq: 0,
+        },
+      ],
+    }));
+
+    snapshot = (internals.createSnapshot as () => GameSnapshot)();
+    assert.equal(snapshot.match.tick, 5);
+    assert.deepEqual(snapshot.players.find((player) => player.id === "p1")?.snake[0], { column: 8, row: 7 });
 
     socket.emitServerMessage({
       type: "gameOver",
       winner: "p2",
       reason: "wall",
-      finalTick: 1,
+      finalTick: 5,
     });
 
-    const snapshot = (internals.createSnapshot as () => GameSnapshot)();
+    snapshot = (internals.createSnapshot as () => GameSnapshot)();
 
     assert.equal(snapshot.match.phase, "gameOver");
     assert.equal(snapshot.match.winnerId, "p2");
@@ -1061,55 +1077,6 @@ test("online PVP settlement can rematch or return to the PVP hall", () => {
     harness.cleanup();
   }
 });
-
-function runOnlineReplay(playerSlot: "p1" | "p2"): ReturnType<typeof projectOnlineReplayDelta> {
-  const socketHarness = new FakeSocketFactoryHarness();
-  const harness = createGameHarness({
-    pvpConnectionOptions: {
-      url: "ws://example.test/ws",
-      socketFactory: socketHarness.factory,
-    },
-  });
-
-  try {
-    const socket = bootOnlinePvpHarness(harness, socketHarness, playerSlot);
-    const internals = harness.game as unknown as Record<string, unknown>;
-    const before = projectOnlineSnapshot(harness);
-
-    (internals.handleInput as (command: {
-      readonly action: "move-up";
-      readonly kind: "pressed";
-      readonly source: "keyboard";
-      readonly playerId: "p1" | "p2";
-    }) => void)({
-      action: "move-up",
-      kind: "pressed",
-      source: "keyboard",
-      playerId: playerSlot,
-    });
-
-    assert.deepEqual(getLastClientMessage(socket), {
-      type: "input",
-      seq: 1,
-      tick: 2,
-      direction: "up",
-    });
-
-    socket.emitServerMessage({
-      type: "peerInput",
-      playerSlot: playerSlot === "p1" ? "p2" : "p1",
-      seq: 1,
-      tick: 2,
-      direction: "up",
-    });
-
-    advanceOnlinePvpTicks(internals, 20, getPvpMovementTicksPerStep(20));
-
-    return projectOnlineReplayDelta(before, projectOnlineSnapshot(harness));
-  } finally {
-    harness.cleanup();
-  }
-}
 
 test("queued disconnect surfaces reconnecting, replays hello, and can retry matchmaking", async () => {
   const socketHarness = new FakeSocketFactoryHarness();
